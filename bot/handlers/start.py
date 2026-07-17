@@ -409,49 +409,53 @@ async def cb_verify_join(cb: CallbackQuery, db: Database, bot: Bot, state: FSMCo
 @router.callback_query(F.data == "home")
 async def cb_home(cb: CallbackQuery, db: Database) -> None:
     await cb.answer()
+    tg = cb.from_user
+    user = await db.get_user(tg.id)
+    balance, streak = 0, 0
+    if user:
+        w = await db.get_wallet(user["id"])
+        balance = w.get("balance", 0)
+        sd = await db.get_streak(user["id"])
+        streak = sd.get("streak", 0)
     await cb.message.edit_text(
-        _home_text(cb.from_user.first_name or "User"),
+        _home_text(tg.first_name or "User", balance, streak),
         parse_mode="HTML",
         reply_markup=main_menu_kb(),
     )
-
-
-# ── Help ──────────────────────────────────────────────────────────────────────
-
-@router.callback_query(F.data == "help")
-async def cb_help(cb: CallbackQuery) -> None:
-    await cb.answer()
-    text = (
-        "❓ <b>Help &amp; FAQ</b>\n\n"
-        "🔹 <b>How to earn points?</b>\n"
-        "   Share your referral link. You get points when your friends join!\n\n"
-        "🔹 <b>How to get Telegram Premium?</b>\n"
-        "   Earn enough points from referrals &amp; daily bonus, then tap ⭐ Get Premium.\n\n"
-        "🔹 <b>Daily Bonus?</b>\n"
-        "   Get free points from 🎁 Daily Bonus every 24 hours.\n\n"
-        "🔹 <b>Is it free?</b>\n"
-        "   Yes! 100% free. Just refer friends and earn.\n\n"
-        "💬 Need more help? Contact the admin."
-    )
-    await cb.message.edit_text(text, parse_mode="HTML", reply_markup=back_to_menu_kb())
 
 
 # ── Utils ─────────────────────────────────────────────────────────────────────
 
 async def show_main_menu(message: Message, first_name: str, db: Database) -> None:
+    tg = message.from_user
+    user = await db.get_user(tg.id)
+    balance, streak = 0, 0
+    if user:
+        w = await db.get_wallet(user["id"])
+        balance = w.get("balance", 0)
+        sd = await db.get_streak(user["id"])
+        streak = sd.get("streak", 0)
     await message.answer(
-        _home_text(first_name),
+        _home_text(first_name, balance, streak),
         parse_mode="HTML",
         reply_markup=main_menu_kb(),
     )
 
 
-def _home_text(first_name: str) -> str:
+def _home_text(first_name: str, balance: int = 0, streak: int = 0) -> str:
     safe = first_name.replace("<", "&lt;").replace(">", "&gt;")
+    fire = "🔥" if streak >= 7 else ("✨" if streak >= 3 else "⚡")
+    streak_str = f"{fire} <b>{streak}-day streak!</b>" if streak > 1 else "⚡ Start your streak!"
     return (
-        f"🏠 <b>Welcome back, {safe}!</b>\n\n"
-        "⭐ Refer friends and earn points\n"
-        "💎 Get Telegram Premium using points\n"
-        "🎁 Claim daily bonus\n\n"
-        "Choose an option from the menu below 👇"
+        f"{'━' * 16}\n"
+        f"  🏠  <b>Welcome back, {safe}!</b>\n"
+        f"{'━' * 16}\n\n"
+        f"💰 <b>Balance:</b>  <code>{balance:,} pts</code>\n"
+        f"📅 <b>Daily Bonus:</b>  {streak_str}\n\n"
+        f"{'─' * 16}\n"
+        f"🌟 <b>What can you do?</b>\n"
+        f"  👥  Refer friends → earn <b>+100 pts</b> each\n"
+        f"  🎁  Daily bonus → free pts every 24h\n"
+        f"  ⭐  Withdraw Telegram Stars with pts\n\n"
+        f"Choose an option below 👇"
     )

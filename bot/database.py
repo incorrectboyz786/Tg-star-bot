@@ -710,6 +710,47 @@ class Database:
             )
             await db.commit()
 
+    # ─── Streak helpers ───────────────────────────────────────────────────────
+
+    async def get_streak(self, user_id: int) -> Dict[str, Any]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT streak, last_claimed FROM daily_bonus WHERE user_id=?", (user_id,)
+            ) as cur:
+                row = await cur.fetchone()
+                if row:
+                    return dict(row)
+                return {"streak": 0, "last_claimed": None}
+
+    async def claim_daily_with_streak(self, user_id: int, new_streak: int) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO daily_bonus(user_id, streak) VALUES (?, 0)", (user_id,)
+            )
+            await db.execute(
+                "UPDATE daily_bonus SET last_claimed=datetime('now'), streak=? WHERE user_id=?",
+                (new_streak, user_id),
+            )
+            await db.commit()
+
+    # ─── Leaderboard rank ─────────────────────────────────────────────────────
+
+    async def get_user_leaderboard_rank(self, user_id: int) -> Optional[int]:
+        async with aiosqlite.connect(self.path) as db:
+            async with db.execute(
+                """SELECT COUNT(*) + 1
+                   FROM wallet w
+                   JOIN users u ON u.id = w.user_id
+                   WHERE u.is_banned = 0
+                   AND w.total_earned > (
+                       SELECT COALESCE(total_earned, 0) FROM wallet WHERE user_id = ?
+                   )""",
+                (user_id,),
+            ) as cur:
+                row = await cur.fetchone()
+                return row[0] if row else 1
+
     # ─── Statistics ───────────────────────────────────────────────────────────
 
     # ─── Star Withdrawals ─────────────────────────────────────────────────────

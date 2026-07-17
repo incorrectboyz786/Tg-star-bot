@@ -1,13 +1,21 @@
 import logging
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import InlineKeyboardButton
 
 from database import Database
-from keyboards.user_kb import back_to_menu_kb
-from utils.helpers import format_number
+from utils.helpers import format_number, progress_bar, get_rank
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+STAR_TIERS = [
+    (15,  300,  "⭐"),
+    (50,  900,  "🌟"),
+    (100, 1700, "💫"),
+    (250, 4000, "🌠"),
+]
 
 
 @router.callback_query(F.data == "wallet")
@@ -20,29 +28,50 @@ async def cb_wallet(cb: CallbackQuery, db: Database) -> None:
         return
 
     w = await db.get_wallet(user["id"])
-    min_balance = int(await db.get_setting("min_stars_balance", "500"))
-    stars_per_claim = int(await db.get_setting("stars_per_claim", "50"))
-    balance = w.get("balance", 0)
-    needed = max(0, min_balance - balance)
-    progress_pct = min(100, int(balance / min_balance * 100)) if min_balance else 100
+    balance       = w.get("balance", 0)
+    total_earned  = w.get("total_earned", 0)
+    ref_earnings  = w.get("referral_earnings", 0)
+    daily_earn    = w.get("daily_earnings", 0)
 
-    filled = progress_pct // 10
-    bar = "█" * filled + "░" * (10 - filled)
+    rank_emoji, rank_title, _ = get_rank(total_earned)
+
+    # Multi-tier progress
+    tier_lines = ""
+    for stars, cost, icon in STAR_TIERS:
+        bar = progress_bar(balance, cost, length=8)
+        status = "✅ READY" if balance >= cost else f"need {format_number(max(0, cost - balance))}"
+        tier_lines += f"  {icon} {stars}⭐ ({format_number(cost)} pts)\n  {bar}  [{status}]\n\n"
+
+    # Earnings breakdown percentages
+    total_e = total_earned or 1
+    ref_pct   = int(ref_earnings / total_e * 100)
+    daily_pct = int(daily_earn   / total_e * 100)
+    other_pct = max(0, 100 - ref_pct - daily_pct)
 
     text = (
-        "💰 <b>Your Wallet</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"💎 <b>Current Balance:</b>   {format_number(balance)} pts\n"
-        f"📈 <b>Total Earned:</b>      {format_number(w.get('total_earned', 0))} pts\n"
-        f"👥 <b>Referral Earnings:</b> {format_number(w.get('referral_earnings', 0))} pts\n"
-        f"🎁 <b>Daily Earnings:</b>    {format_number(w.get('daily_earnings', 0))} pts\n\n"
-        f"🌟 <b>Withdrawal Rate:</b> {format_number(min_balance)} pts = {stars_per_claim} Stars ⭐\n\n"
-        f"📊 <b>Progress to Next Withdrawal:</b>\n"
-        f"{bar}  {progress_pct}%\n\n"
-    )
-    if needed > 0:
-        text += f"⚡ <b>Need {format_number(needed)} more points</b> — keep referring!"
-    else:
-        text += "🎉 <b>You have enough points!</b> Tap ⭐ Get Stars to withdraw."
+        f"{'━' * 16}\n"
+        f"  💰  <b>MY WALLET</b>\n"
+        f"  {rank_emoji} <i>{rank_title}</i>\n"
+        f"{'━' * 16}\n\n"
 
-    await cb.message.edit_text(text, parse_mode="HTML", reply_markup=back_to_menu_kb())
+        f"💎 <b>Current Balance</b>\n"
+        f"     <code>{format_number(balance)} pts</code>\n\n"
+
+        f"📊 <b>Earnings Breakdown</b>\n"
+        f"  👥 Referrals:  {format_number(ref_earnings)} pts  ({ref_pct}%)\n"
+        f"  🎁 Daily:      {format_number(daily_earn)} pts  ({daily_pct}%)\n"
+        f"  📈 Total:      {format_number(total_earned)} pts\n\n"
+
+        f"{'─' * 16}\n"
+        f"⭐ <b>WITHDRAWAL PROGRESS</b>\n"
+        f"{'─' * 16}\n\n"
+        f"{tier_lines}"
+        f"💡 <i>Refer friends to earn {100} pts each!</i>"
+    )
+
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="⭐ Withdraw Stars", callback_data="get_stars", style="primary"))
+    builder.row(InlineKeyboardButton(text="👥 Refer & Earn",   callback_data="refer",     style="primary"))
+    builder.row(InlineKeyboardButton(text="🏠 Back to Menu",  callback_data="home",      style="primary"))
+
+    await cb.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())

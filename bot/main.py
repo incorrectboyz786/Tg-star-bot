@@ -14,7 +14,7 @@ from aiogram.types import ErrorEvent
 from config import Config
 from database import Database
 from middlewares.auth import AuthMiddleware
-from handlers import admin, start, profile, referral, wallet, daily_bonus, stars
+from handlers import admin, start, profile, referral, wallet, daily_bonus, stars, help
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,16 +53,15 @@ async def main() -> None:
     dp.include_router(wallet.router)
     dp.include_router(daily_bonus.router)
     dp.include_router(stars.router)
+    dp.include_router(help.router)
 
     bot_info = await bot.get_me()
     logger.info("Bot ready: @%s (id=%s)", bot_info.username, bot_info.id)
-    logger.info("Deep link: https://t.me/%s?start=hello", bot_info.username)
 
     @dp.errors()
     async def global_error_handler(event: ErrorEvent) -> bool:
         err = event.exception
         if isinstance(err, TelegramForbiddenError):
-            logger.info("User blocked the bot — ignored: %s", err)
             return True
         if isinstance(err, TelegramBadRequest) and "message is not modified" in str(err):
             return True
