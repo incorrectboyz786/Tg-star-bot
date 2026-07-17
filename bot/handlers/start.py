@@ -1,0 +1,457 @@
+import logging
+import random
+import io
+from PIL import Image, ImageDraw, ImageFont
+from aiogram import Router, F, Bot
+from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import Message, CallbackQuery, BufferedInputFile
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+
+from database import Database
+from config import Config
+from keyboards.user_kb import main_menu_kb, force_join_kb, back_to_menu_kb
+
+logger = logging.getLogger(__name__)
+router = Router()
+
+MAX_CAPTCHA_ATTEMPTS = 3
+
+
+# ── FSM ────────────────────────────────────────────────────────────────────────
+
+class StartStates(StatesGroup):
+    captcha = State()
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _gen_captcha() -> tuple[str, int]:
+    """Return (question_text, correct_answer)."""
+    ops = [
+        lambda a, b: (f"{a} + {b}", a + b),
+        lambda a, b: (f"{a} × {b}", a * b),
+        lambda a, b: (f"{a} - {b}", a - b),
+    ]
+    op = random.choice(ops)
+    a, b = random.randint(2, 12), random.randint(2, 12)
+    if op == ops[2] and b > a:   # avoid negative subtraction
+        a, b = b, a
+    q, ans = op(a, b)
+    return q, ans
+
+
+async def enrich_channels(bot: Bot, channels: list, db: Database) -> list[dict]:
+    """Fetch & persist invite links for channels that have none."""
+    enriched = []
+    for ch in channels:
+        if ch.get("invite_link") or ch.get("channel_username"):
+            enriched.append(ch)
+            continue
+        try:
+            chat = await bot.get_chat(ch["channel_id"])
+            uname = chat.username
+            title = chat.title or ch.get("channel_title") or ch["channel_id"]
+            link = (
+                f"https://t.me/{uname}"
+                if uname
+                else (chat.invite_link or await bot.export_chat_invite_link(ch["channel_id"]))
+            )
+            await db.update_channel_invite_link(
+                ch["channel_id"], link, title=title, username=uname
+            )
+            enriched.append({**ch, "invite_link": link, "channel_title": title, "channel_username": uname})
+        except Exception as e:
+            logger.warning("Could not fetch invite link for %s: %s", ch["channel_id"], e)
+            enriched.append(ch)
+    return enriched
+
+
+async def check_force_join(bot: Bot, user_id: int, channels: list) -> list[dict]:
+    """
+    Returns channels the user has NOT joined.
+    Fails CLOSED — unverifiable channel = not joined.
+    """
+    not_joined = []
+    for ch in channels:
+        try:
+            member = await bot.get_chat_member(chat_id=ch["channel_id"], user_id=user_id)
+            if member.status in ("left", "kicked", "banned"):
+                not_joined.append(ch)
+        except (TelegramBadRequest, TelegramForbiddenError) as e:
+            logger.warning("Cannot verify membership %s (%s) — treating as not joined", ch["channel_id"], e)
+            not_joined.append(ch)
+        except Exception as e:
+            logger.error("Unexpected error checking %s: %s — treating as not joined", ch["channel_id"], e)
+            not_joined.append(ch)
+    return not_joined
+
+
+async def _try_award_referral(user: dict, bot: Bot, db: Database) -> None:
+    """Award referral points to referrer — only if user has a referrer and not yet awarded."""
+    referrer_db_id = user.get("referrer_id")
+    if not referrer_db_id:
+        return
+    reward = int(await db.get_setting("referral_reward", "100"))
+    awarded = await db.add_referral_atomic(referrer_db_id, user["id"], reward)
+    if awarded:
+        try:
+            ref_user_row = await db.get_user_by_id(referrer_db_id)
+            if ref_user_row:
+                await bot.send_message(
+                    ref_user_row["telegram_id"],
+                    f"🎉 <b>New Referral!</b>\n\n"
+                    f"<b>{user.get('first_name', 'User')}</b> joined using your referral link "
+                    f"and completed the channel join verification!\n"
+                    f"<b>+{reward} points</b> have been added to your wallet! 💰",
+                    parse_mode="HTML",
+                )
+        except Exception:
+            pass
+
+
+def generate_image_captcha(text: str) -> io.BytesIO:
+    # Create an image with a light background
+    width, height = 220, 80
+    image = Image.new("RGB", (width, height), color=(245, 245, 245))
+    draw = ImageDraw.Draw(image)
+    
+    # Try loading DejaVuSans, fallback to default font
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36)
+    except Exception:
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 36)
+        except Exception:
+            font = ImageFont.load_default()
+            
+    # Draw background noise lines
+    for _ in range(8):
+        x1 = random.randint(0, width)
+        y1 = random.randint(0, height)
+        x2 = random.randint(0, width)
+        y2 = random.randint(0, height)
+        draw.line((x1, y1, x2, y2), fill=random.choice([(200, 200, 200), (180, 180, 180), (220, 220, 220)]), width=2)
+        
+    # Draw character by character with slight rotation/offset
+    for i, char in enumerate(text):
+        char_x = 20 + i * 35 + random.randint(-5, 5)
+        char_y = 15 + random.randint(-8, 8)
+        color = random.choice([
+            (220, 50, 50),
+            (50, 150, 50),
+            (50, 50, 200),
+            (150, 50, 150),
+            (50, 150, 150),
+            (50, 50, 50)
+        ])
+        draw.text((char_x, char_y), char, font=font, fill=color)
+        
+    # Draw foreground noise dots
+    for _ in range(150):
+        x = random.randint(0, width)
+        y = random.randint(0, height)
+        draw.point((x, y), fill=(100, 100, 100))
+        
+    # Save image to BytesIO
+    out = io.BytesIO()
+    image.save(out, format="PNG")
+    out.seek(0)
+    return out
+
+
+async def _send_captcha(target, state: FSMContext, attempts: int = 0) -> None:
+    """Send a fresh image CAPTCHA. target = Message or CallbackQuery."""
+    code = "".join(random.choices("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", k=5))
+    await state.set_state(StartStates.captcha)
+    await state.update_data(captcha_code=code, captcha_attempts=attempts)
+    
+    # Generate image
+    image_data = generate_image_captcha(code)
+    photo = BufferedInputFile(image_data.read(), filename="captcha.png")
+    
+    text = (
+        "🔐 <b>Advanced Device Verification</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "To prevent bot abuse, please type the characters shown in the image below:\n\n"
+        "<i>Type the 5 characters shown in the image below (Case-Insensitive).</i>"
+    )
+    
+    if isinstance(target, CallbackQuery):
+        try:
+            await target.message.delete()
+        except Exception:
+            pass
+        await target.message.answer_photo(photo, caption=text, parse_mode="HTML")
+    else:
+        await target.answer_photo(photo, caption=text, parse_mode="HTML")
+
+
+# ── /start ─────────────────────────────────────────────────────────────────────
+
+@router.message(CommandStart())
+async def cmd_start(message: Message, db: Database, config: Config, bot: Bot, state: FSMContext) -> None:
+    await state.clear()
+    tg = message.from_user
+
+    # Parse referral deep-link
+    referrer_db_id = None
+    args = message.text.split(maxsplit=1)[1] if " " in (message.text or "") else ""
+    if args.startswith("ref_"):
+        try:
+            ref_tg_id = int(args[4:])
+            if ref_tg_id != tg.id:
+                ref_user = await db.get_user(ref_tg_id)
+                if ref_user:
+                    referrer_db_id = ref_user["id"]
+        except ValueError:
+            pass
+
+    # Register / update
+    user_db_id = await db.add_user(
+        telegram_id=tg.id,
+        username=tg.username,
+        first_name=tg.first_name or "User",
+        last_name=tg.last_name,
+        referrer_id=referrer_db_id,
+    )
+    await db.update_user_info(tg.id, tg.username, tg.first_name or "User", tg.last_name)
+    user = await db.get_user(tg.id)
+
+    # ── Force Join — every /start ──────────────────────────────────────────
+    channels = await db.get_channels()
+    if channels:
+        channels = await enrich_channels(bot, channels, db)
+        not_joined = await check_force_join(bot, tg.id, channels)
+        if not_joined:
+            try:
+                import os
+                from aiogram.types import FSInputFile
+                _BOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                vid_path = os.path.join(_BOT_DIR, "vid.mp4")
+                
+                caption_text = (
+                    "👋 𝗪𝗲𝗹𝗰𝗼𝗺𝗲 𝘁𝗼 𝙁𝙍𝙀𝙀 𝙏𝙂 𝙋𝙍𝙀𝙈𝙄𝙐𝙈 𝘽𝙊𝙏\n\n"
+                    "📢 𝙁𝙄𝙍𝙎𝙏 𝙅𝙊𝙄𝙉 𝘾𝙃𝘼𝙉𝙉𝙀𝙇.\n\n"
+                    "𝙏𝙃𝙀𝙉 𝘾𝙇𝙄𝘾𝙆 𝙊𝙉 𝙑𝙀𝙍𝙄𝙁𝙄𝙀𝘿 𝙅𝙊𝙄𝙉."
+                )
+                
+                if os.path.exists(vid_path):
+                    await message.answer_video(
+                        video=FSInputFile(vid_path),
+                        caption=caption_text,
+                        parse_mode="HTML",
+                        reply_markup=force_join_kb(not_joined),
+                    )
+                else:
+                    await message.answer(
+                        text=caption_text,
+                        parse_mode="HTML",
+                        reply_markup=force_join_kb(not_joined),
+                    )
+            except TelegramForbiddenError:
+                pass  # user blocked bot — nothing to do
+            except Exception as e:
+                logger.error("Failed to send start video: %s", e)
+                try:
+                    await message.answer(
+                        text="👋 <b>Welcome!</b>\n\n"
+                             "📢 <b>Pehle yeh channels join karo:</b>\n\n"
+                             "Join karne ke baad <b>✅ Verify Joined</b> dabao.",
+                        parse_mode="HTML",
+                        reply_markup=force_join_kb(not_joined),
+                    )
+                except Exception:
+                    pass
+            return
+        else:
+            await db.set_force_join_done(user_db_id)
+            user["force_join_done"] = 1
+            # Award referral only after channel join confirmed
+            await _try_award_referral(user, bot, db)
+    else:
+        # No channels configured — award referral immediately if user is already verified,
+        # otherwise it will be awarded in handle_captcha after verification.
+        if user.get("device_verified"):
+            await _try_award_referral(user, bot, db)
+
+    # ── Device Verification (CAPTCHA) ─────────────────────────────────────
+    if not user.get("device_verified"):
+        await _send_captcha(message, state)
+        return
+
+    # ── Main Menu ─────────────────────────────────────────────────────────
+    await show_main_menu(message, tg.first_name or "User", db)
+
+
+# ── CAPTCHA answer handler ─────────────────────────────────────────────────────
+
+@router.message(StartStates.captcha)
+async def handle_captcha(message: Message, db: Database, bot: Bot, state: FSMContext) -> None:
+    data = await state.get_data()
+    correct = data.get("captcha_code")
+    attempts = data.get("captcha_attempts", 0)
+
+    user_input = message.text.strip().upper()
+
+    if user_input == correct:
+        await state.clear()
+        tg = message.from_user
+        user = await db.get_user(tg.id)
+        if user:
+            await db.set_device_verified(user["id"])
+            await _try_award_referral(user, bot, db)
+        await message.answer(
+            "✅ <b>Verification successful!</b>\n\n"
+            "Your device has been verified. You can now use the bot! 🎉",
+            parse_mode="HTML"
+        )
+        await show_main_menu(message, tg.first_name or "User", db)
+    else:
+        attempts += 1
+        if attempts >= MAX_CAPTCHA_ATTEMPTS:
+            await state.clear()
+            await message.answer(
+                "❌ <b>Verification failed!</b>\n\n"
+                f"Incorrect answer entered {MAX_CAPTCHA_ATTEMPTS} times.\n"
+                "Please /start again.",
+                parse_mode="HTML"
+            )
+        else:
+            remaining = MAX_CAPTCHA_ATTEMPTS - attempts
+            await message.answer(
+                f"❌ Incorrect code! <b>{remaining} attempt(s)</b> remaining.",
+                parse_mode="HTML"
+            )
+            await _send_captcha(message, state, attempts)
+
+
+# ── noop (no link yet) ────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "noop")
+async def cb_noop(cb: CallbackQuery) -> None:
+    await cb.answer("⏳ Fetching links, please /start again.", show_alert=True)
+
+
+# ── Verify join ───────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "verify_join")
+async def cb_verify_join(cb: CallbackQuery, db: Database, bot: Bot, state: FSMContext) -> None:
+    tg = cb.from_user
+    user = await db.get_user(tg.id)
+    if not user:
+        await cb.answer("Please /start first.", show_alert=True)
+        return
+
+    channels = await db.get_channels()
+    channels = await enrich_channels(bot, channels, db)
+    not_joined = await check_force_join(bot, tg.id, channels)
+
+    if not_joined:
+        await cb.answer("❌ You have not joined all channels yet!", show_alert=True)
+        caption_text = (
+            "📢 𝙁𝙄𝙍𝙎𝙏 𝙅𝙊𝙄𝙉 𝘾𝙃𝘼𝙉𝙉𝙀𝙇.\n\n"
+            "𝙏𝙃𝙀𝙉 𝘾𝙇𝙄𝘾𝙆 𝙊𝙉 𝙑𝙀𝙍𝙄𝙁𝙄𝙀𝘿 𝙅𝙊𝙄𝙉."
+        )
+        if cb.message.video or cb.message.photo:
+            try:
+                await cb.message.edit_caption(
+                    caption=caption_text,
+                    parse_mode="HTML",
+                    reply_markup=force_join_kb(not_joined)
+                )
+            except Exception:
+                pass
+        else:
+            try:
+                await cb.message.edit_text(
+                    text=caption_text,
+                    parse_mode="HTML",
+                    reply_markup=force_join_kb(not_joined)
+                )
+            except Exception:
+                pass
+        return
+
+    await db.set_force_join_done(user["id"])
+    await cb.answer("✅ Channels verified!", show_alert=False)
+
+    # Award referral only after channel join confirmed
+    await _try_award_referral(user, bot, db)
+
+    if not user.get("device_verified"):
+        await _send_captcha(cb, state)
+    else:
+        if cb.message.video or cb.message.photo:
+            try:
+                await cb.message.delete()
+            except Exception:
+                pass
+            await cb.message.answer(
+                _home_text(tg.first_name or "User"),
+                parse_mode="HTML",
+                reply_markup=main_menu_kb(),
+            )
+        else:
+            try:
+                await cb.message.edit_text(
+                    _home_text(tg.first_name or "User"),
+                    parse_mode="HTML",
+                    reply_markup=main_menu_kb(),
+                )
+            except Exception:
+                pass
+
+
+# ── Home ──────────────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "home")
+async def cb_home(cb: CallbackQuery, db: Database) -> None:
+    await cb.answer()
+    await cb.message.edit_text(
+        _home_text(cb.from_user.first_name or "User"),
+        parse_mode="HTML",
+        reply_markup=main_menu_kb(),
+    )
+
+
+# ── Help ──────────────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "help")
+async def cb_help(cb: CallbackQuery) -> None:
+    await cb.answer()
+    text = (
+        "❓ <b>Help &amp; FAQ</b>\n\n"
+        "🔹 <b>How to earn points?</b>\n"
+        "   Share your referral link. You get points when your friends join!\n\n"
+        "🔹 <b>How to get Telegram Premium?</b>\n"
+        "   Earn enough points from referrals &amp; daily bonus, then tap ⭐ Get Premium.\n\n"
+        "🔹 <b>Daily Bonus?</b>\n"
+        "   Get free points from 🎁 Daily Bonus every 24 hours.\n\n"
+        "🔹 <b>Is it free?</b>\n"
+        "   Yes! 100% free. Just refer friends and earn.\n\n"
+        "💬 Need more help? Contact the admin."
+    )
+    await cb.message.edit_text(text, parse_mode="HTML", reply_markup=back_to_menu_kb())
+
+
+# ── Utils ─────────────────────────────────────────────────────────────────────
+
+async def show_main_menu(message: Message, first_name: str, db: Database) -> None:
+    await message.answer(
+        _home_text(first_name),
+        parse_mode="HTML",
+        reply_markup=main_menu_kb(),
+    )
+
+
+def _home_text(first_name: str) -> str:
+    safe = first_name.replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        f"🏠 <b>Welcome back, {safe}!</b>\n\n"
+        "⭐ Refer friends and earn points\n"
+        "💎 Get Telegram Premium using points\n"
+        "🎁 Claim daily bonus\n\n"
+        "Choose an option from the menu below 👇"
+    )
