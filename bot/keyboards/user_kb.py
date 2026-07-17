@@ -47,6 +47,7 @@ def stars_tiers_kb(
                 InlineKeyboardButton(
                     text=label,
                     callback_data="stars_locked",
+                    style="primary",
                 )
             )
     builder.row(
