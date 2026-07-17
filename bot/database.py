@@ -56,31 +56,16 @@ CREATE TABLE IF NOT EXISTS device_verification (
     FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
-CREATE TABLE IF NOT EXISTS reward_codes (
+CREATE TABLE IF NOT EXISTS star_withdrawals (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    code TEXT UNIQUE NOT NULL,
-    is_used INTEGER DEFAULT 0,
-    added_by INTEGER,
-    added_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS assigned_reward_codes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    code_id INTEGER UNIQUE NOT NULL,
     user_id INTEGER NOT NULL,
-    assigned_at TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY(code_id) REFERENCES reward_codes(id),
+    stars_amount INTEGER NOT NULL,
+    points_spent INTEGER NOT NULL,
+    status TEXT DEFAULT 'pending',
+    created_at TEXT DEFAULT (datetime('now')),
+    processed_at TEXT,
+    processed_by INTEGER,
     FOREIGN KEY(user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS claim_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    code_id INTEGER NOT NULL,
-    code TEXT NOT NULL,
-    claimed_at TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY(user_id) REFERENCES users(id),
-    FOREIGN KEY(code_id) REFERENCES reward_codes(id)
 );
 
 CREATE TABLE IF NOT EXISTS channels (
@@ -109,12 +94,12 @@ CREATE TABLE IF NOT EXISTS broadcast_history (
 
 DEFAULT_SETTINGS = {
     "referral_reward": "100",
-    "min_premium_balance": "500",
+    "min_stars_balance": "500",
+    "stars_per_claim": "50",
     "daily_bonus_amount": "50",
     "max_referrals": "9999",
-    "tutorial_video_file_id": "",
-    "tutorial_video_caption": "🎉 Congratulations! Here's how to redeem your Telegram Premium code.",
-    "welcome_message": "Welcome to TG Premium Bot! Refer friends to earn points and get Telegram Premium! 🚀",
+    "dm_link": "",
+    "welcome_message": "Welcome to TG Stars Bot! Refer friends to earn points and get Telegram Stars! ⭐",
 }
 
 
@@ -727,41 +712,142 @@ class Database:
 
     # ─── Statistics ───────────────────────────────────────────────────────────
 
+    # ─── Star Withdrawals ─────────────────────────────────────────────────────
+
+    async def create_withdrawal(
+        self, user_id: int, stars_amount: int, points_spent: int
+    ) -> Optional[int]:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                async with db.execute(
+                    "SELECT balance FROM wallet WHERE user_id=?", (user_id,)
+                ) as cur:
+                    row = await cur.fetchone()
+                    if not row or row[0] < points_spent:
+                        await db.execute("ROLLBACK")
+                        return None
+                await db.execute(
+                    "UPDATE wallet SET balance=balance-?, updated_at=datetime('now') WHERE user_id=?",
+                    (points_spent, user_id),
+                )
+                cur = await db.execute(
+                    "INSERT INTO star_withdrawals(user_id, stars_amount, points_spent, status) VALUES (?, ?, ?, 'pending')",
+                    (user_id, stars_amount, points_spent),
+                )
+                withdrawal_id = cur.lastrowid
+                await db.execute("COMMIT")
+                return withdrawal_id
+            except Exception:
+                await db.execute("ROLLBACK")
+                raise
+
+    async def get_withdrawal(self, withdrawal_id: int) -> Optional[Dict]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """SELECT sw.*, u.first_name, u.username, u.telegram_id
+                   FROM star_withdrawals sw
+                   JOIN users u ON u.id = sw.user_id
+                   WHERE sw.id=?""",
+                (withdrawal_id,),
+            ) as cur:
+                row = await cur.fetchone()
+                return dict(row) if row else None
+
+    async def get_pending_withdrawals(self) -> List[Dict]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """SELECT sw.*, u.first_name, u.username, u.telegram_id
+                   FROM star_withdrawals sw
+                   JOIN users u ON u.id = sw.user_id
+                   WHERE sw.status='pending'
+                   ORDER BY sw.created_at ASC""",
+            ) as cur:
+                rows = await cur.fetchall()
+                return [dict(r) for r in rows]
+
+    async def get_all_withdrawals(self, limit: int = 50) -> List[Dict]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """SELECT sw.*, u.first_name, u.username, u.telegram_id
+                   FROM star_withdrawals sw
+                   JOIN users u ON u.id = sw.user_id
+                   ORDER BY sw.created_at DESC LIMIT ?""",
+                (limit,),
+            ) as cur:
+                rows = await cur.fetchall()
+                return [dict(r) for r in rows]
+
+    async def get_user_withdrawals(self, user_id: int) -> List[Dict]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM star_withdrawals WHERE user_id=? ORDER BY created_at DESC LIMIT 10",
+                (user_id,),
+            ) as cur:
+                rows = await cur.fetchall()
+                return [dict(r) for r in rows]
+
+    async def approve_withdrawal(self, withdrawal_id: int, admin_id: int) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "UPDATE star_withdrawals SET status='approved', processed_at=datetime('now'), processed_by=? WHERE id=? AND status='pending'",
+                (admin_id, withdrawal_id),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def reject_withdrawal(self, withdrawal_id: int, admin_id: int) -> Optional[Dict]:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                db.row_factory = aiosqlite.Row
+                async with db.execute(
+                    "SELECT * FROM star_withdrawals WHERE id=? AND status='pending'",
+                    (withdrawal_id,),
+                ) as cur:
+                    row = await cur.fetchone()
+                    if not row:
+                        await db.execute("ROLLBACK")
+                        return None
+                    w = dict(row)
+                db.row_factory = None
+                await db.execute(
+                    "UPDATE star_withdrawals SET status='rejected', processed_at=datetime('now'), processed_by=? WHERE id=?",
+                    (admin_id, withdrawal_id),
+                )
+                await db.execute(
+                    "UPDATE wallet SET balance=balance+?, updated_at=datetime('now') WHERE user_id=?",
+                    (w["points_spent"], w["user_id"]),
+                )
+                await db.execute("COMMIT")
+                return w
+            except Exception:
+                await db.execute("ROLLBACK")
+                raise
+
+    # ─── Statistics ───────────────────────────────────────────────────────────
+
     async def get_stats(self) -> Dict[str, Any]:
         async with aiosqlite.connect(self.path) as db:
-            async with db.execute("SELECT COUNT(*) FROM users") as cur:
-                total_users = (await cur.fetchone())[0]
-            async with db.execute("SELECT COUNT(*) FROM users WHERE is_banned=1") as cur:
-                banned_users = (await cur.fetchone())[0]
-            async with db.execute("SELECT COUNT(*) FROM referrals") as cur:
-                total_referrals = (await cur.fetchone())[0]
-            async with db.execute(
-                "SELECT COUNT(*) FROM reward_codes WHERE is_used=0"
-            ) as cur:
-                unused_codes = (await cur.fetchone())[0]
-            async with db.execute(
-                "SELECT COUNT(*) FROM reward_codes WHERE is_used=1"
-            ) as cur:
-                used_codes = (await cur.fetchone())[0]
-            async with db.execute("SELECT COUNT(*) FROM claim_history") as cur:
-                total_claims = (await cur.fetchone())[0]
-            async with db.execute(
-                "SELECT COUNT(*) FROM users WHERE date(created_at)=date('now')"
-            ) as cur:
-                new_today = (await cur.fetchone())[0]
-            async with db.execute("SELECT COALESCE(SUM(total_earned),0) FROM wallet") as cur:
-                total_points = (await cur.fetchone())[0]
+            async def scalar(q, *p):
+                async with db.execute(q, p) as cur:
+                    r = await cur.fetchone()
+                    return r[0] if r else 0
 
-        return {
-            "total_users": total_users,
-            "banned_users": banned_users,
-            "total_referrals": total_referrals,
-            "unused_codes": unused_codes,
-            "used_codes": used_codes,
-            "total_claims": total_claims,
-            "new_today": new_today,
-            "total_points": total_points,
-        }
+            return {
+                "total_users": await scalar("SELECT COUNT(*) FROM users"),
+                "new_today": await scalar("SELECT COUNT(*) FROM users WHERE date(created_at)=date('now')"),
+                "banned_users": await scalar("SELECT COUNT(*) FROM users WHERE is_banned=1"),
+                "total_referrals": await scalar("SELECT COUNT(*) FROM referrals"),
+                "pending_withdrawals": await scalar("SELECT COUNT(*) FROM star_withdrawals WHERE status='pending'"),
+                "approved_withdrawals": await scalar("SELECT COUNT(*) FROM star_withdrawals WHERE status='approved'"),
+                "total_stars_sent": await scalar("SELECT COALESCE(SUM(stars_amount),0) FROM star_withdrawals WHERE status='approved'"),
+                "total_points": await scalar("SELECT COALESCE(SUM(total_earned),0) FROM wallet"),
+            }
 
     async def get_top_referrers(self, limit: int = 10) -> List[Dict]:
         async with aiosqlite.connect(self.path) as db:

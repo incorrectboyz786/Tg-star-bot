@@ -1,3 +1,3 @@
-from handlers import admin, start, profile, referral, wallet, daily_bonus, premium
+from handlers import admin, start, profile, referral, wallet, daily_bonus, stars
 
-__all__ = ["admin", "start", "profile", "referral", "wallet", "daily_bonus", "premium"]
+__all__ = ["admin", "start", "profile", "referral", "wallet", "daily_bonus", "stars"]
