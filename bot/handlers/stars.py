@@ -1,13 +1,23 @@
 import logging
 from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import InlineKeyboardButton
 
 from database import Database
-from keyboards.user_kb import back_to_menu_kb, confirm_stars_kb
+from keyboards.user_kb import back_to_menu_kb, stars_tiers_kb, confirm_tier_kb
 from utils.helpers import format_number
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+# ── Star tiers: (stars, points_cost) ─────────────────────────────────────────
+STAR_TIERS = [
+    (15,  300,  "⭐"),
+    (50,  900,  "🌟"),
+    (100, 1700, "💫"),
+    (250, 4000, "🌠"),
+]
 
 
 @router.callback_query(F.data == "get_stars")
@@ -19,42 +29,80 @@ async def cb_get_stars(cb: CallbackQuery, db: Database) -> None:
         await cb.answer("Please send /start first.", show_alert=True)
         return
 
-    min_balance = int(await db.get_setting("min_stars_balance", "500"))
-    stars_per_claim = int(await db.get_setting("stars_per_claim", "50"))
+    wallet = await db.get_wallet(user["id"])
+    balance = wallet.get("balance", 0)
+    reward_per_ref = int(await db.get_setting("referral_reward", "100"))
+
+    # Progress bar toward first tier
+    first_cost = STAR_TIERS[0][1]
+    pct = min(100, int(balance / first_cost * 100)) if first_cost else 100
+    filled = pct // 10
+    bar = "█" * filled + "░" * (10 - filled)
+
+    # Build tier lines
+    tier_lines = ""
+    for stars, cost, icon in STAR_TIERS:
+        if balance >= cost:
+            tier_lines += f"  {icon} <b>{stars} Stars</b> — {format_number(cost)} pts ✅\n"
+        else:
+            need = cost - balance
+            tier_lines += f"  {icon} <b>{stars} Stars</b> — {format_number(cost)} pts 🔒 (need {format_number(need)} more)\n"
+
+    text = (
+        "⭐ <b>Telegram Stars Withdrawal</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"💰 <b>Your Balance:</b>  <code>{format_number(balance)} pts</code>\n"
+        f"📊 <b>Progress:</b>  {bar}  {pct}%\n\n"
+        "🎯 <b>Choose Your Stars Package:</b>\n\n"
+        f"{tier_lines}\n"
+        "💡 <i>Tap an unlocked package to withdraw!</i>"
+    )
+    await cb.message.edit_text(
+        text, parse_mode="HTML",
+        reply_markup=stars_tiers_kb(balance, STAR_TIERS),
+    )
+
+
+@router.callback_query(F.data.startswith("stars_tier_"))
+async def cb_select_tier(cb: CallbackQuery, db: Database) -> None:
+    await cb.answer()
+    tg = cb.from_user
+    user = await db.get_user(tg.id)
+    if not user:
+        return
+
+    stars = int(cb.data.split("_")[2])
+    tier = next(((s, c, i) for s, c, i in STAR_TIERS if s == stars), None)
+    if not tier:
+        return
+
+    stars_amt, cost, icon = tier
     wallet = await db.get_wallet(user["id"])
     balance = wallet.get("balance", 0)
 
-    if balance < min_balance:
-        needed = min_balance - balance
-        reward_per_ref = int(await db.get_setting("referral_reward", "100"))
-        needed_refs = max(1, -(-needed // reward_per_ref))
-        text = (
-            "❌ <b>Insufficient Points</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"⭐ <b>Required:</b> {format_number(min_balance)} pts\n"
-            f"💰 <b>Your Balance:</b> {format_number(balance)} pts\n"
-            f"📉 <b>Still Need:</b> {format_number(needed)} pts\n\n"
-            f"👥 Refer ~{needed_refs} more friend(s) to reach the goal!\n\n"
-            "📤 Share your referral link from the <b>Refer &amp; Earn</b> section."
-        )
-        await cb.message.edit_text(text, parse_mode="HTML", reply_markup=back_to_menu_kb())
+    if balance < cost:
+        await cb.answer(f"❌ Need {format_number(cost - balance)} more points!", show_alert=True)
         return
 
-    # Eligible — show confirm screen
     text = (
-        "⭐ <b>Withdraw Telegram Stars</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"✅ <b>Your Balance:</b> {format_number(balance)} pts\n"
-        f"💸 <b>Points to Spend:</b> {format_number(min_balance)} pts\n"
-        f"💰 <b>After Withdrawal:</b> {format_number(balance - min_balance)} pts\n\n"
-        f"🌟 <b>You will receive:</b> {stars_per_claim} Telegram Stars ⭐\n\n"
-        "ℹ️ Admin will review your request and send Stars directly to your account.\n\n"
-        "⚠️ <b>This action cannot be undone.</b> Confirm?"
+        f"{icon} <b>Confirm Withdrawal</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"⭐ <b>Stars You'll Get:</b>     <code>{stars_amt} Stars</code>\n"
+        f"💸 <b>Points to Spend:</b>    <code>{format_number(cost)} pts</code>\n"
+        f"💰 <b>Balance After:</b>       <code>{format_number(balance - cost)} pts</code>\n\n"
+        "╔══════════════════════════╗\n"
+        f"║  🌟  <b>{stars_amt} Telegram Stars</b>  🌟  ║\n"
+        "╚══════════════════════════╝\n\n"
+        "📬 Admin will send Stars directly to your account.\n"
+        "⚠️ <b>This cannot be undone. Confirm?</b>"
     )
-    await cb.message.edit_text(text, parse_mode="HTML", reply_markup=confirm_stars_kb())
+    await cb.message.edit_text(
+        text, parse_mode="HTML",
+        reply_markup=confirm_tier_kb(stars_amt, cost),
+    )
 
 
-@router.callback_query(F.data == "do_withdraw_stars")
+@router.callback_query(F.data.startswith("do_withdraw_"))
 async def cb_do_withdraw(cb: CallbackQuery, db: Database, bot: Bot, config) -> None:
     await cb.answer()
     tg = cb.from_user
@@ -62,53 +110,49 @@ async def cb_do_withdraw(cb: CallbackQuery, db: Database, bot: Bot, config) -> N
     if not user:
         return
 
-    min_balance = int(await db.get_setting("min_stars_balance", "500"))
-    stars_per_claim = int(await db.get_setting("stars_per_claim", "50"))
+    parts = cb.data.split("_")   # do_withdraw_{stars}_{cost}
+    stars_amt = int(parts[2])
+    cost = int(parts[3])
 
     withdrawal_id = await db.create_withdrawal(
         user_id=user["id"],
-        stars_amount=stars_per_claim,
-        points_spent=min_balance,
+        stars_amount=stars_amt,
+        points_spent=cost,
     )
 
     if withdrawal_id is None:
         wallet = await db.get_wallet(user["id"])
-        if wallet.get("balance", 0) < min_balance:
-            await cb.message.edit_text(
-                "❌ <b>Insufficient balance.</b> Earn more points first.",
-                parse_mode="HTML",
-                reply_markup=back_to_menu_kb(),
-            )
-        else:
-            await cb.message.edit_text(
-                "⚠️ <b>Something went wrong.</b> Please try again.",
-                parse_mode="HTML",
-                reply_markup=back_to_menu_kb(),
-            )
+        msg = (
+            "❌ <b>Insufficient balance.</b> Earn more points first."
+            if wallet.get("balance", 0) < cost
+            else "⚠️ <b>Something went wrong.</b> Please try again."
+        )
+        await cb.message.edit_text(msg, parse_mode="HTML", reply_markup=back_to_menu_kb())
         return
 
-    # Notify user
-    uname = f"@{tg.username}" if tg.username else f"ID: {tg.id}"
+    uname = f"@{tg.username}" if tg.username else f"ID:{tg.id}"
     await cb.message.edit_text(
-        f"✅ <b>Withdrawal Request Submitted!</b>\n\n"
-        f"🔖 <b>Request ID:</b> #{withdrawal_id}\n"
-        f"🌟 <b>Stars:</b> {stars_per_claim} ⭐\n\n"
-        f"⏳ Admin will review and send Stars to your account shortly.\n\n"
-        f"💡 Track status in <b>My Withdrawals</b>.",
+        "✅ <b>Withdrawal Request Submitted!</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🔖 <b>Request ID:</b>  <code>#{withdrawal_id}</code>\n"
+        f"⭐ <b>Stars:</b>         <code>{stars_amt} ⭐</code>\n"
+        f"💸 <b>Points Spent:</b>  <code>{format_number(cost)} pts</code>\n\n"
+        "⏳ <i>Admin will review and send Stars shortly.</i>\n\n"
+        "📜 Track your request in <b>My Withdrawals</b>.",
         parse_mode="HTML",
         reply_markup=back_to_menu_kb(),
     )
 
     # Notify admins
-    dm_link = await db.get_setting("dm_link", "")
     admin_text = (
-        f"🔔 <b>New Stars Withdrawal Request!</b>\n\n"
+        f"🔔 <b>New Stars Withdrawal!</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"🔖 <b>ID:</b> #{withdrawal_id}\n"
         f"👤 <b>User:</b> {tg.first_name} ({uname})\n"
         f"🆔 <b>TG ID:</b> <code>{tg.id}</code>\n"
-        f"🌟 <b>Stars:</b> {stars_per_claim} ⭐\n"
-        f"💸 <b>Points Spent:</b> {format_number(min_balance)}\n\n"
-        f"Use /admin → Pending Withdrawals to approve or reject."
+        f"⭐ <b>Stars:</b> {stars_amt} ⭐\n"
+        f"💸 <b>Points:</b> {format_number(cost)}\n\n"
+        f"➡️ /admin → Pending Withdrawals"
     )
     for admin_id in config.admin_ids:
         try:
@@ -132,26 +176,24 @@ async def cb_my_withdrawals(cb: CallbackQuery, db: Database) -> None:
         text = (
             "📜 <b>My Withdrawals</b>\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "You haven't made any withdrawal requests yet.\n\n"
-            "Earn points and tap ⭐ Get Stars to withdraw!"
+            "🌙 <i>No withdrawal requests yet.</i>\n\n"
+            "Earn points and tap <b>⭐ Get Stars</b> to start!"
         )
     else:
-        status_icons = {
-            "pending": "⏳",
-            "approved": "✅",
-            "rejected": "❌",
-        }
+        status_icons = {"pending": "⏳", "approved": "✅", "rejected": "❌"}
+        total_approved = sum(w["stars_amount"] for w in withdrawals if w["status"] == "approved")
         lines = []
         for w in withdrawals:
             icon = status_icons.get(w["status"], "❓")
-            date = w.get("created_at", "")[:10]
+            date = str(w.get("created_at", ""))[:10]
             lines.append(
-                f"{icon} #{w['id']} — {w['stars_amount']}⭐ — {w['status'].upper()} ({date})"
+                f"{icon} <code>#{w['id']}</code> — <b>{w['stars_amount']}⭐</b> — {w['status'].upper()} <i>({date})</i>"
             )
         text = (
             "📜 <b>My Withdrawal History</b>\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
             + "\n".join(lines)
+            + f"\n\n🌟 <b>Total Stars Earned:</b> {total_approved} ⭐"
         )
 
     await cb.message.edit_text(text, parse_mode="HTML", reply_markup=back_to_menu_kb())

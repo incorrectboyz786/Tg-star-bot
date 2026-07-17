@@ -1,6 +1,6 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from typing import List, Dict
+from typing import List, Dict, Tuple
 
 
 def main_menu_kb() -> InlineKeyboardMarkup:
@@ -24,6 +24,55 @@ def main_menu_kb() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def stars_tiers_kb(
+    balance: int,
+    tiers: List[Tuple[int, int, str]],
+) -> InlineKeyboardMarkup:
+    """Full-width tier selection buttons."""
+    builder = InlineKeyboardBuilder()
+    for stars, cost, icon in tiers:
+        if balance >= cost:
+            label = f"{icon}  {stars} Stars  —  {cost:,} pts  ✅"
+            builder.row(
+                InlineKeyboardButton(
+                    text=label,
+                    callback_data=f"stars_tier_{stars}",
+                    style="primary",
+                )
+            )
+        else:
+            needed = cost - balance
+            label = f"🔒  {stars} Stars  —  {cost:,} pts  (need {needed:,})"
+            builder.row(
+                InlineKeyboardButton(
+                    text=label,
+                    callback_data="stars_locked",
+                )
+            )
+    builder.row(
+        InlineKeyboardButton(text="🏠 Back to Menu", callback_data="home", style="primary")
+    )
+    return builder.as_markup()
+
+
+def confirm_tier_kb(stars: int, cost: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text=f"✅  Confirm  —  {stars} Stars",
+            callback_data=f"do_withdraw_{stars}_{cost}",
+            style="primary",
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(text="‹ Back to Packages", callback_data="get_stars", style="primary")
+    )
+    builder.row(
+        InlineKeyboardButton(text="🏠 Back to Menu", callback_data="home")
+    )
+    return builder.as_markup()
+
+
 def force_join_kb(channels: List[Dict]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     buttons = []
@@ -35,25 +84,32 @@ def force_join_kb(channels: List[Dict]) -> InlineKeyboardMarkup:
             or (f"https://t.me/{uname.lstrip('@')}" if uname else None)
         )
         if link:
-            buttons.append(InlineKeyboardButton(text=f"📢 {label}", url=link, style="primary"))
+            buttons.append(InlineKeyboardButton(text=f"📢  {label}", url=link, style="primary"))
         else:
             buttons.append(InlineKeyboardButton(text="⏳ Loading…", callback_data="noop"))
     builder.add(*buttons)
-    builder.adjust(2)
-    builder.row(InlineKeyboardButton(text="✅ Verify Joined", callback_data="verify_join", style="success"))
+    builder.adjust(1)   # full-width channel buttons
+    builder.row(
+        InlineKeyboardButton(text="✅  Verify Joined", callback_data="verify_join", style="primary")
+    )
     return builder.as_markup()
 
 
 def back_to_menu_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="🏠 Back to Menu", callback_data="home", style="primary"))
+    builder.row(
+        InlineKeyboardButton(text="🏠 Back to Menu", callback_data="home", style="primary")
+    )
     return builder.as_markup()
 
 
 def confirm_stars_kb() -> InlineKeyboardMarkup:
+    """Legacy single-tier confirm (kept for compatibility)."""
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="✅ Yes, Withdraw!", callback_data="do_withdraw_stars", style="success"),
-        InlineKeyboardButton(text="❌ Cancel", callback_data="home", style="danger"),
+        InlineKeyboardButton(text="✅  Yes, Withdraw!", callback_data="do_withdraw_stars", style="primary")
+    )
+    builder.row(
+        InlineKeyboardButton(text="❌  Cancel", callback_data="home")
     )
     return builder.as_markup()
