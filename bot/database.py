@@ -95,7 +95,7 @@ CREATE TABLE IF NOT EXISTS broadcast_history (
 DEFAULT_SETTINGS = {
     "referral_reward": "100",
     "min_stars_balance": "500",
-    "stars_per_claim": "50",
+    "stars_per_claim": "15",
     "daily_bonus_amount": "50",
     "max_referrals": "9999",
     "dm_link": "",
