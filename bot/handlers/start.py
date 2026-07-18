@@ -1,4 +1,5 @@
 import logging
+import os
 import random
 import io
 from PIL import Image, ImageDraw, ImageFont
@@ -6,7 +7,8 @@ from aiogram import Router, F, Bot
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery, BufferedInputFile
+from aiogram.types import Message, CallbackQuery, BufferedInputFile, InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from database import Database
@@ -300,14 +302,35 @@ async def handle_captcha(message: Message, db: Database, bot: Bot, state: FSMCon
         tg = message.from_user
         user = await db.get_user(tg.id)
         if user:
-            await db.set_device_verified(user["id"])
-            await _try_award_referral(user, bot, db)
-        await message.answer(
-            "✅ <b>Verification successful!</b>\n\n"
-            "Your device has been verified. You can now use the bot! 🎉",
-            parse_mode="HTML"
-        )
-        await show_main_menu(message, tg.first_name or "User", db)
+            # Generate web fingerprint token
+            token = await db.create_device_token(user["id"])
+            domain = (
+                os.environ.get("REPLIT_DOMAINS", "").split(",")[0].strip()
+                or os.environ.get("REPLIT_DEV_DOMAIN", "").strip()
+            )
+            verify_url = f"https://{domain}/verify?t={token}" if domain else None
+
+            builder = InlineKeyboardBuilder()
+            if verify_url:
+                builder.row(InlineKeyboardButton(
+                    text="🔍 Verify My Device", url=verify_url, style="primary"
+                ))
+            builder.row(InlineKeyboardButton(
+                text="✅ I'm Verified", callback_data="check_fv", style="primary"
+            ))
+
+            await message.answer(
+                "✅ <b>CAPTCHA Passed!</b>\n\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "🔐 <b>One Last Step — Device Verification</b>\n\n"
+                "Tap <b>🔍 Verify My Device</b> to open the verification page.\n"
+                "It checks your device silently (takes ~3 seconds).\n\n"
+                "After the page shows <b>✅ Device Verified</b>, come back here\n"
+                "and tap <b>✅ I'm Verified</b>.\n\n"
+                "<i>⚠️ One device can only be linked to one account.</i>",
+                parse_mode="HTML",
+                reply_markup=builder.as_markup(),
+            )
     else:
         attempts += 1
         if attempts >= MAX_CAPTCHA_ATTEMPTS:
@@ -402,6 +425,54 @@ async def cb_verify_join(cb: CallbackQuery, db: Database, bot: Bot, state: FSMCo
                 )
             except Exception:
                 pass
+
+
+# ── Check device fingerprint verified ────────────────────────────────────────
+
+@router.callback_query(F.data == "check_fv")
+async def cb_check_fv(cb: CallbackQuery, db: Database) -> None:
+    await cb.answer()
+    tg = cb.from_user
+    user = await db.get_user(tg.id)
+    if not user:
+        await cb.answer("Please /start first.", show_alert=True)
+        return
+
+    verified = await db.is_device_verified(user["id"])
+    if verified:
+        await _try_award_referral(user, cb.bot, db)
+        try:
+            await cb.message.edit_text(
+                "✅ <b>Device Verified Successfully!</b>\n\n"
+                "Your device is now linked to this account.\n"
+                "Welcome to the bot! 🎉",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+        await show_main_menu(cb.message, tg.first_name or "User", db)
+    else:
+        # Regenerate token so user can retry
+        token = await db.create_device_token(user["id"])
+        domain = (
+            os.environ.get("REPLIT_DOMAINS", "").split(",")[0].strip()
+            or os.environ.get("REPLIT_DEV_DOMAIN", "").strip()
+        )
+        verify_url = f"https://{domain}/verify?t={token}" if domain else None
+
+        builder = InlineKeyboardBuilder()
+        if verify_url:
+            builder.row(InlineKeyboardButton(
+                text="🔍 Verify My Device", url=verify_url, style="primary"
+            ))
+        builder.row(InlineKeyboardButton(
+            text="✅ I'm Verified", callback_data="check_fv", style="primary"
+        ))
+        await cb.answer("❌ Device not verified yet!", show_alert=True)
+        try:
+            await cb.message.edit_reply_markup(reply_markup=builder.as_markup())
+        except Exception:
+            pass
 
 
 # ── Home ──────────────────────────────────────────────────────────────────────

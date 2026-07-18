@@ -56,6 +56,14 @@ CREATE TABLE IF NOT EXISTS device_verification (
     FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
+CREATE TABLE IF NOT EXISTS verification_tokens (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    expires_at TEXT NOT NULL,
+    used INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS star_withdrawals (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -750,6 +758,73 @@ class Database:
             ) as cur:
                 row = await cur.fetchone()
                 return row[0] if row else 1
+
+    # ─── Device fingerprint / verification tokens ─────────────────────────────
+
+    async def create_device_token(self, user_id: int) -> str:
+        import uuid
+        token = uuid.uuid4().hex
+        expires = (datetime.utcnow() + timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+        async with aiosqlite.connect(self.path) as db:
+            # Remove old unused tokens for this user
+            await db.execute(
+                "DELETE FROM verification_tokens WHERE user_id=? AND used=0", (user_id,)
+            )
+            await db.execute(
+                "INSERT INTO verification_tokens(token, user_id, expires_at) VALUES (?,?,?)",
+                (token, user_id, expires),
+            )
+            await db.commit()
+        return token
+
+    async def get_device_token(self, token: str) -> Optional[Dict[str, Any]]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM verification_tokens WHERE token=?", (token,)
+            ) as cur:
+                row = await cur.fetchone()
+                return dict(row) if row else None
+
+    async def check_fingerprint_conflict(self, fingerprint_hash: str, user_id: int) -> bool:
+        """Returns True if this fingerprint belongs to a DIFFERENT user (conflict)."""
+        async with aiosqlite.connect(self.path) as db:
+            async with db.execute(
+                "SELECT user_id FROM device_verification WHERE device_hash=? AND user_id!=?",
+                (fingerprint_hash, user_id),
+            ) as cur:
+                row = await cur.fetchone()
+                return row is not None
+
+    async def store_fingerprint_and_verify(
+        self, user_id: int, fingerprint_hash: str, token: str
+    ) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            # Store fingerprint
+            await db.execute(
+                """INSERT INTO device_verification(user_id, device_hash)
+                   VALUES (?,?)
+                   ON CONFLICT(user_id) DO UPDATE SET device_hash=excluded.device_hash,
+                   verified_at=datetime('now')""",
+                (user_id, fingerprint_hash),
+            )
+            # Mark user as verified
+            await db.execute(
+                "UPDATE users SET device_verified=1 WHERE id=?", (user_id,)
+            )
+            # Mark token as used
+            await db.execute(
+                "UPDATE verification_tokens SET used=1 WHERE token=?", (token,)
+            )
+            await db.commit()
+
+    async def is_device_verified(self, user_id: int) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            async with db.execute(
+                "SELECT device_verified FROM users WHERE id=?", (user_id,)
+            ) as cur:
+                row = await cur.fetchone()
+                return bool(row and row[0])
 
     # ─── Statistics ───────────────────────────────────────────────────────────
 

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -17,33 +18,7 @@ from config import Config
 from database import Database
 from middlewares.auth import AuthMiddleware
 from handlers import admin, start, profile, referral, wallet, daily_bonus, stars, help
-
-
-async def run_health_server() -> None:
-    """Minimal HTTP server so Replit deployment health-checks pass."""
-    port = int(os.environ.get("PORT", 8080))
-
-    async def health(request: web.Request) -> web.Response:
-        return web.Response(text="OK")
-
-    app = web.Application()
-    app.router.add_get("/", health)
-    app.router.add_get("/health", health)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    try:
-        await site.start()
-        logger.info("Health server listening on port %s", port)
-    except OSError as e:
-        logger.warning("Health server could not start on port %s: %s (skipping)", port, e)
-
-
-async def health_server_task() -> None:
-    """Runs health server and stays alive forever (even if server fails to bind)."""
-    await run_health_server()
-    # Keep this coroutine alive so gather() doesn't cancel polling
-    await asyncio.Event().wait()
+from fingerprint_page import get_verify_html
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,6 +27,103 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
+
+
+def make_web_app(db: Database) -> web.Application:
+    """Build the aiohttp web application with health + fingerprint routes."""
+
+    async def health(request: web.Request) -> web.Response:
+        return web.Response(text="OK")
+
+    async def verify_page(request: web.Request) -> web.Response:
+        token = request.query.get("t", "")
+        return web.Response(
+            text=get_verify_html(token),
+            content_type="text/html",
+        )
+
+    async def fingerprint_handler(request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+        except Exception:
+            return web.Response(
+                text=json.dumps({"ok": False, "reason": "bad_request"}),
+                content_type="application/json",
+                status=400,
+            )
+
+        token = data.get("token", "")
+        fp_hash = data.get("fingerprint", "")
+
+        if not token or not fp_hash:
+            return web.Response(
+                text=json.dumps({"ok": False, "reason": "missing_fields"}),
+                content_type="application/json",
+                status=400,
+            )
+
+        token_record = await db.get_device_token(token)
+        if not token_record or token_record["used"]:
+            return web.Response(
+                text=json.dumps({"ok": False, "reason": "invalid_token"}),
+                content_type="application/json",
+            )
+
+        # Check expiry
+        from datetime import datetime
+        try:
+            expires = datetime.strptime(token_record["expires_at"], "%Y-%m-%d %H:%M:%S")
+            if datetime.utcnow() > expires:
+                return web.Response(
+                    text=json.dumps({"ok": False, "reason": "invalid_token"}),
+                    content_type="application/json",
+                )
+        except Exception:
+            pass
+
+        user_id = token_record["user_id"]
+
+        # Conflict check — same device, different account?
+        conflict = await db.check_fingerprint_conflict(fp_hash, user_id)
+        if conflict:
+            logger.warning("Device conflict for user_id=%s fp=%s", user_id, fp_hash[:16])
+            return web.Response(
+                text=json.dumps({"ok": False, "reason": "duplicate_device"}),
+                content_type="application/json",
+            )
+
+        # All good — store fingerprint and mark verified
+        await db.store_fingerprint_and_verify(user_id, fp_hash, token)
+        logger.info("Device verified for user_id=%s", user_id)
+        return web.Response(
+            text=json.dumps({"ok": True}),
+            content_type="application/json",
+        )
+
+    app = web.Application()
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
+    app.router.add_get("/verify", verify_page)
+    app.router.add_post("/fingerprint", fingerprint_handler)
+    return app
+
+
+async def run_web_server(db: Database) -> None:
+    port = int(os.environ.get("PORT", 8080))
+    app = make_web_app(db)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    try:
+        await site.start()
+        logger.info("Web server listening on port %s", port)
+    except OSError as e:
+        logger.warning("Web server could not start on port %s: %s (skipping)", port, e)
+
+
+async def web_server_task(db: Database) -> None:
+    await run_web_server(db)
+    await asyncio.Event().wait()   # stay alive forever
 
 
 async def main() -> None:
@@ -97,10 +169,9 @@ async def main() -> None:
         logger.error("Unhandled error: %s", err, exc_info=err)
         return True
 
-    # Run health server + bot polling concurrently
     try:
         await asyncio.gather(
-            health_server_task(),
+            web_server_task(db),
             dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types()),
         )
     finally:
