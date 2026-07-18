@@ -13,6 +13,7 @@ from keyboards.admin_kb import (
     admin_main_kb,
     admin_back_kb,
     channels_kb,
+    channel_type_kb,
     cancel_kb,
     withdrawal_action_kb,
 )
@@ -34,8 +35,10 @@ class AdminStates(StatesGroup):
     add_balance_id    = State()
     add_balance_amt   = State()
     set_dm_link       = State()
-    add_channel_id    = State()
-    add_channel_name  = State()
+    add_channel_type    = State()   # waiting for public/private choice
+    add_channel_public  = State()   # waiting for @username
+    add_channel_private = State()   # waiting for t.me/+ invite link
+    add_channel_name    = State()   # waiting for display name (private only)
 
 
 # ── Admin check ─────────────────────────────────────────────────────────────────
@@ -610,25 +613,105 @@ async def cb_adm_addchan(cb: CallbackQuery, config: Config, state: FSMContext) -
         await cb.answer("Not authorized.", show_alert=True)
         return
     await cb.answer()
-    await state.set_state(AdminStates.add_channel_id)
+    await state.set_state(AdminStates.add_channel_type)
     await cb.message.edit_text(
         "📡 <b>Add Channel</b>\n\n"
-        "Step 1/2: Send the channel username or ID.\n"
-        "Example: <code>@mychannel</code> or <code>-1001234567890</code>",
+        "Channel ka type select karo:",
+        parse_mode="HTML",
+        reply_markup=channel_type_kb(),
+    )
+
+
+# ── Public channel flow ────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "adm_chan_public", AdminStates.add_channel_type)
+async def cb_chan_public(cb: CallbackQuery, state: FSMContext, config: Config) -> None:
+    if not is_admin(cb.from_user.id, config):
+        await cb.answer("Not authorized.", show_alert=True)
+        return
+    await cb.answer()
+    await state.set_state(AdminStates.add_channel_public)
+    await cb.message.edit_text(
+        "🌐 <b>Public Channel</b>\n\n"
+        "Channel ka <b>@username</b> bhejo:\n"
+        "Example: <code>@mychannel</code>",
         parse_mode="HTML",
         reply_markup=cancel_kb("adm_channels"),
     )
 
 
-@router.message(AdminStates.add_channel_id)
-async def do_add_channel_id(message: Message, state: FSMContext, config: Config) -> None:
+@router.message(AdminStates.add_channel_public)
+async def do_add_channel_public(message: Message, db: Database, state: FSMContext, config: Config, bot: Bot) -> None:
     if not is_admin(message.from_user.id, config):
         return
-    identifier = (message.text or "").strip()
-    await state.update_data(channel_id=identifier)
+    username = (message.text or "").strip()
+    if not username.startswith("@"):
+        await message.answer(
+            "❌ Username <b>@</b> se shuru hona chahiye.\nExample: <code>@mychannel</code>",
+            parse_mode="HTML",
+            reply_markup=cancel_kb("adm_channels"),
+        )
+        return
+
+    # Try to fetch channel title automatically
+    title = username
+    try:
+        chat = await bot.get_chat(username)
+        title = chat.title or username
+    except Exception:
+        pass
+
+    await state.clear()
+    ok = await db.add_channel(channel_id=username, username=username, title=title, invite_link=None)
+    if ok:
+        await message.answer(
+            f"✅ Public channel <b>{escape_html(title)}</b> add ho gaya!",
+            parse_mode="HTML",
+            reply_markup=admin_back_kb(),
+        )
+    else:
+        await message.answer("❌ Channel already exists ya error aaya.", reply_markup=admin_back_kb())
+
+
+# ── Private channel flow ───────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "adm_chan_private", AdminStates.add_channel_type)
+async def cb_chan_private(cb: CallbackQuery, state: FSMContext, config: Config) -> None:
+    if not is_admin(cb.from_user.id, config):
+        await cb.answer("Not authorized.", show_alert=True)
+        return
+    await cb.answer()
+    await state.set_state(AdminStates.add_channel_private)
+    await cb.message.edit_text(
+        "🔒 <b>Private Channel</b>\n\n"
+        "Channel ka <b>invite link</b> bhejo:\n"
+        "Example: <code>https://t.me/+xxxxxxxxxxxx</code>\n\n"
+        "<i>⚠️ Bot ko us channel mein Admin hona chahiye</i>",
+        parse_mode="HTML",
+        reply_markup=cancel_kb("adm_channels"),
+    )
+
+
+@router.message(AdminStates.add_channel_private)
+async def do_add_channel_private(message: Message, state: FSMContext, config: Config) -> None:
+    if not is_admin(message.from_user.id, config):
+        return
+    link = (message.text or "").strip()
+    if "t.me/+" not in link and "t.me/joinchat/" not in link:
+        await message.answer(
+            "❌ Sahi invite link bhejo.\nExample: <code>https://t.me/+xxxxxxxxxxxx</code>",
+            parse_mode="HTML",
+            reply_markup=cancel_kb("adm_channels"),
+        )
+        return
+    if not link.startswith("http"):
+        link = f"https://{link}"
+    await state.update_data(invite_link=link)
     await state.set_state(AdminStates.add_channel_name)
     await message.answer(
-        "📡 <b>Add Channel</b>\n\nStep 2/2: Send a display name for this channel.",
+        "🔒 <b>Private Channel</b>\n\n"
+        "Ab is channel ka <b>display name</b> bhejo\n"
+        "(jo users ko dikhe, e.g. <code>My Private Channel</code>):",
         parse_mode="HTML",
         reply_markup=cancel_kb("adm_channels"),
     )
@@ -640,27 +723,18 @@ async def do_add_channel_name(message: Message, db: Database, state: FSMContext,
         return
     data = await state.get_data()
     await state.clear()
-    channel_id = data["channel_id"]
-    display_name = (message.text or "").strip() or channel_id
+    invite_link = data.get("invite_link", "")
+    display_name = (message.text or "").strip() or invite_link
 
-    # Detect channel type and store correctly
-    invite_link = None
-    username = None
-    if channel_id.startswith("@"):
-        username = channel_id
-    elif "t.me/+" in channel_id or "t.me/joinchat/" in channel_id:
-        # Private invite link entered as channel ID — store it as invite_link
-        invite_link = channel_id if channel_id.startswith("http") else f"https://{channel_id}"
-
-    ok = await db.add_channel(channel_id=channel_id, username=username, title=display_name, invite_link=invite_link)
+    ok = await db.add_channel(channel_id=invite_link, username=None, title=display_name, invite_link=invite_link)
     if ok:
         await message.answer(
-            f"✅ Channel <b>{escape_html(display_name)}</b> added!",
+            f"✅ Private channel <b>{escape_html(display_name)}</b> add ho gaya!",
             parse_mode="HTML",
             reply_markup=admin_back_kb(),
         )
     else:
-        await message.answer("❌ Channel already exists or error.", reply_markup=admin_back_kb())
+        await message.answer("❌ Channel already exists ya error aaya.", reply_markup=admin_back_kb())
 
 
 @router.callback_query(F.data.startswith("adm_rmchan_"))

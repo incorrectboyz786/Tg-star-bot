@@ -64,6 +64,18 @@ def channels_kb(channels: List[Dict]) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def channel_type_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🌐 Public Channel", callback_data="adm_chan_public", style="primary"),
+        InlineKeyboardButton(text="🔒 Private Channel", callback_data="adm_chan_private", style="primary"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="❌ Cancel", callback_data="adm_channels", style="primary")
+    )
+    return builder.as_markup()
+
+
 def cancel_kb(back_cb: str = "adm_panel") -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
