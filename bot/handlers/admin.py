@@ -642,8 +642,17 @@ async def do_add_channel_name(message: Message, db: Database, state: FSMContext,
     await state.clear()
     channel_id = data["channel_id"]
     display_name = (message.text or "").strip() or channel_id
-    username = channel_id if channel_id.startswith("@") else None
-    ok = await db.add_channel(channel_id=channel_id, username=username, title=display_name)
+
+    # Detect channel type and store correctly
+    invite_link = None
+    username = None
+    if channel_id.startswith("@"):
+        username = channel_id
+    elif "t.me/+" in channel_id or "t.me/joinchat/" in channel_id:
+        # Private invite link entered as channel ID — store it as invite_link
+        invite_link = channel_id if channel_id.startswith("http") else f"https://{channel_id}"
+
+    ok = await db.add_channel(channel_id=channel_id, username=username, title=display_name, invite_link=invite_link)
     if ok:
         await message.answer(
             f"✅ Channel <b>{escape_html(display_name)}</b> added!",

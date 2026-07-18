@@ -90,6 +90,14 @@ async def enrich_channels(bot: Bot, channels: list, db: Database) -> list[dict]:
         if ch.get("invite_link") or ch.get("channel_username"):
             enriched.append(ch)
             continue
+
+        # channel_id itself might be a t.me/+ invite link — use it directly
+        cid = ch.get("channel_id", "")
+        if "t.me/+" in cid or "t.me/joinchat/" in cid:
+            link = cid if cid.startswith("http") else f"https://{cid}"
+            enriched.append({**ch, "invite_link": link})
+            continue
+
         try:
             chat = await bot.get_chat(ch["channel_id"])
             uname = chat.username
