@@ -397,10 +397,10 @@ async def handle_captcha(message: Message, db: Database, bot: Bot, state: FSMCon
             builder = InlineKeyboardBuilder()
             if verify_url:
                 builder.row(InlineKeyboardButton(
-                    text="🔍 Verify My Device", url=verify_url, style="primary"
+                    text="🔍 Verify My Device", url=verify_url, style="positive"
                 ))
             builder.row(InlineKeyboardButton(
-                text="✅ I'm Verified", callback_data="check_fv", style="primary"
+                text="✅ I'm Verified", callback_data="check_fv", style="positive"
             ))
 
             await message.answer(
@@ -544,10 +544,10 @@ async def cb_check_fv(cb: CallbackQuery, db: Database) -> None:
         builder = InlineKeyboardBuilder()
         if verify_url:
             builder.row(InlineKeyboardButton(
-                text="🔍 Verify My Device", url=verify_url, style="primary"
+                text="🔍 Verify My Device", url=verify_url, style="positive"
             ))
         builder.row(InlineKeyboardButton(
-            text="✅ I'm Verified", callback_data="check_fv", style="primary"
+            text="✅ I'm Verified", callback_data="check_fv", style="positive"
         ))
         await cb.answer("❌ Device not verified yet!", show_alert=True)
         try:

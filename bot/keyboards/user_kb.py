@@ -10,12 +10,12 @@ def main_menu_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="👤 Profile", callback_data="profile", style="primary"),
     )
     builder.row(
-        InlineKeyboardButton(text="👥 Refer & Earn", callback_data="refer", style="primary"),
+        InlineKeyboardButton(text="👥 Refer & Earn", callback_data="refer", style="positive"),
         InlineKeyboardButton(text="💰 Wallet", callback_data="wallet", style="primary"),
     )
     builder.row(
-        InlineKeyboardButton(text="🎁 Daily Bonus", callback_data="daily_bonus", style="primary"),
-        InlineKeyboardButton(text="⭐ Get Stars", callback_data="get_stars", style="primary"),
+        InlineKeyboardButton(text="🎁 Daily Bonus", callback_data="daily_bonus", style="positive"),
+        InlineKeyboardButton(text="⭐ Get Stars", callback_data="get_stars", style="positive"),
     )
     builder.row(
         InlineKeyboardButton(text="📜 My Withdrawals", callback_data="my_withdrawals", style="primary"),
@@ -37,7 +37,7 @@ def stars_tiers_kb(
                 InlineKeyboardButton(
                     text=label,
                     callback_data=f"stars_tier_{stars}",
-                    style="primary",
+                    style="positive",
                 )
             )
         else:
@@ -47,7 +47,7 @@ def stars_tiers_kb(
                 InlineKeyboardButton(
                     text=label,
                     callback_data="stars_locked",
-                    style="primary",
+                    style="destructive",
                 )
             )
     builder.row(
@@ -62,14 +62,14 @@ def confirm_tier_kb(stars: int, cost: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton(
             text=f"✅  Confirm  —  {stars} Stars",
             callback_data=f"do_withdraw_{stars}_{cost}",
-            style="primary",
+            style="positive",
         )
     )
     builder.row(
         InlineKeyboardButton(text="‹ Back to Packages", callback_data="get_stars", style="primary")
     )
     builder.row(
-        InlineKeyboardButton(text="🏠 Back to Menu", callback_data="home")
+        InlineKeyboardButton(text="🏠 Back to Menu", callback_data="home", style="primary")
     )
     return builder.as_markup()
 
@@ -91,7 +91,7 @@ def force_join_kb(channels: List[Dict]) -> InlineKeyboardMarkup:
     builder.add(*buttons)
     builder.adjust(1)   # full-width channel buttons
     builder.row(
-        InlineKeyboardButton(text="✅  Verify Joined", callback_data="verify_join", style="primary")
+        InlineKeyboardButton(text="✅  Verify Joined", callback_data="verify_join", style="positive")
     )
     return builder.as_markup()
 
@@ -108,9 +108,9 @@ def confirm_stars_kb() -> InlineKeyboardMarkup:
     """Legacy single-tier confirm (kept for compatibility)."""
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="✅  Yes, Withdraw!", callback_data="do_withdraw_stars", style="primary")
+        InlineKeyboardButton(text="✅  Yes, Withdraw!", callback_data="do_withdraw_stars", style="positive")
     )
     builder.row(
-        InlineKeyboardButton(text="❌  Cancel", callback_data="home")
+        InlineKeyboardButton(text="❌  Cancel", callback_data="home", style="destructive")
     )
     return builder.as_markup()
