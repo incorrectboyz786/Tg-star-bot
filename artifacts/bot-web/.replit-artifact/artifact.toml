@@ -1,0 +1,35 @@
+kind = "web"
+previewPath = "/"
+title = "Star Bot"
+version = "1.0.0"
+id = "artifacts/bot-web"
+
+[[services]]
+localPort = 19946
+name = "web"
+paths = ["/"]
+
+[services.env]
+PORT = "19946"
+BASE_PATH = "/"
+
+[services.development]
+run = "pnpm --filter @workspace/bot-web run dev"
+
+[services.production]
+
+[services.production.build]
+args = ["pnpm", "--filter", "@workspace/bot-web", "run", "build"]
+
+[services.production.build.env]
+NODE_ENV = "production"
+BASE_PATH = "/"
+
+[services.production.run]
+args = ["sh", "-c", "cd bot && python3 main.py"]
+
+[services.production.run.env]
+PORT = "19946"
+
+[services.production.health.startup]
+path = "/health"
