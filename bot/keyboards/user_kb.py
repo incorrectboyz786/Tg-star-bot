@@ -85,7 +85,7 @@ def force_join_kb(channels: List[Dict]) -> InlineKeyboardMarkup:
             or (f"https://t.me/{uname.lstrip('@')}" if uname else None)
         )
         if link:
-            buttons.append(InlineKeyboardButton(text=f"📢  {label}", url=link, style="primary"))
+            buttons.append(InlineKeyboardButton(text=f"📢  {label}", url=link, style="positive"))
         else:
             buttons.append(InlineKeyboardButton(text="⏳ Loading…", callback_data="noop"))
     builder.add(*buttons)
