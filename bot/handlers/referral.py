@@ -10,10 +10,7 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 STAR_TIERS = [
-    (15,  300,  "⭐"),
-    (50,  900,  "🌟"),
-    (100, 1700, "💫"),
-    (250, 4000, "🌠"),
+    (15, 1500, "⭐"),
 ]
 
 
