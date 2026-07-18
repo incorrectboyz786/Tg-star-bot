@@ -77,110 +77,91 @@ def _gen_captcha() -> tuple[str, int]:
 
 
 async def enrich_channels(bot: Bot, channels: list, db: Database) -> list[dict]:
-    """Fetch & persist invite links for channels that have none.
+    """
+    Ensure every channel has an invite_link for the join button.
 
-    Private channel rules:
-    - Bot must be admin with 'can_invite_users' permission.
-    - We try export_chat_invite_link first, then create_chat_invite_link as fallback.
-    - If both fail (bot not admin), the channel button will show a warning in logs.
+    - Public channels (@username): link = t.me/username, no admin needed.
+    - Private channels (numeric ID + invite_link in DB): already stored, use directly.
+    - Private channels (numeric ID, no invite_link yet): try to export/create one.
     """
     enriched = []
     for ch in channels:
-        # Already has everything we need
-        if ch.get("invite_link") or ch.get("channel_username"):
+        cid = ch.get("channel_id", "")
+
+        # Already has invite link stored — use it directly
+        if ch.get("invite_link"):
             enriched.append(ch)
             continue
 
-        # channel_id itself might be a t.me/+ invite link — use it directly
-        cid = ch.get("channel_id", "")
-        if "t.me/+" in cid or "t.me/joinchat/" in cid:
-            link = cid if cid.startswith("http") else f"https://{cid}"
-            enriched.append({**ch, "invite_link": link})
+        # Public channel — build link from username
+        uname = ch.get("channel_username") or (cid if cid.startswith("@") else None)
+        if uname:
+            link = f"https://t.me/{uname.lstrip('@')}"
+            enriched.append({**ch, "invite_link": link, "channel_username": uname})
             continue
 
+        # Numeric ID private channel — try to get/create invite link via bot admin
         try:
-            chat = await bot.get_chat(ch["channel_id"])
-            uname = chat.username
-            title = chat.title or ch.get("channel_title") or ch["channel_id"]
+            chat = await bot.get_chat(cid)
+            title = chat.title or ch.get("channel_title") or cid
 
-            if uname:
-                # Public channel — use username link, no admin required
-                link = f"https://t.me/{uname.lstrip('@')}"
-            elif chat.invite_link:
-                # Private channel — bot already has an invite link from Telegram
+            if chat.invite_link:
                 link = chat.invite_link
             else:
-                # Private channel — bot needs to create/export an invite link
-                # Try export first (replaces primary link), fall back to create_chat_invite_link
                 try:
-                    link = await bot.export_chat_invite_link(ch["channel_id"])
+                    link = await bot.export_chat_invite_link(cid)
                 except Exception:
-                    try:
-                        invite = await bot.create_chat_invite_link(ch["channel_id"])
-                        link = invite.invite_link
-                    except Exception as inner_e:
-                        logger.warning(
-                            "Private channel %s: bot is not admin or lacks 'can_invite_users'. "
-                            "Make the bot an admin with invite permission. Error: %s",
-                            ch["channel_id"], inner_e,
-                        )
-                        enriched.append(ch)
-                        continue
+                    invite = await bot.create_chat_invite_link(cid)
+                    link = invite.invite_link
 
-            await db.update_channel_invite_link(
-                ch["channel_id"], link, title=title, username=uname
-            )
-            enriched.append({**ch, "invite_link": link, "channel_title": title, "channel_username": uname})
+            await db.update_channel_invite_link(cid, link, title=title)
+            enriched.append({**ch, "invite_link": link, "channel_title": title})
         except Exception as e:
-            logger.warning("Could not fetch info for channel %s: %s", ch["channel_id"], e)
-            enriched.append(ch)
+            logger.warning("Could not get invite link for channel %s: %s", cid, e)
+            enriched.append(ch)   # show without link (will show noop button)
+
     return enriched
 
 
 async def check_force_join(bot: Bot, user_id: int, channels: list) -> list[dict]:
     """
-    Returns channels the user has NOT joined.
+    Returns list of channels the user has NOT joined.
 
-    Private channel behaviour:
-    - Bot must be admin to call get_chat_member on private channels.
-    - TelegramForbiddenError usually means bot is not in the channel at all
-      (not an admin). We log a clear warning and SKIP that channel so users
-      are not permanently stuck. Fix: add the bot as admin with member access.
-    - TelegramBadRequest with "user not found" means user hasn't started the
-      bot yet via the channel link — treat as not joined.
-    - Any other TelegramBadRequest (e.g. invalid chat id) — skip to avoid
-      blocking all users due to a misconfigured channel.
+    Uses channel_id (numeric or @username) for get_chat_member.
+    Skips channels where bot is not admin (TelegramForbiddenError).
+    Treats 'user not found' as not-joined.
     """
     not_joined = []
     for ch in channels:
+        cid = ch.get("channel_id", "")
+
+        # Skip if channel_id is an invite link URL (can't use for membership check)
+        if cid.startswith("http") or "t.me/+" in cid:
+            logger.warning(
+                "Channel %s has invite link as ID — can't verify membership. "
+                "Remove and re-add with numeric ID.",
+                cid,
+            )
+            continue
+
         try:
-            member = await bot.get_chat_member(chat_id=ch["channel_id"], user_id=user_id)
+            member = await bot.get_chat_member(chat_id=cid, user_id=user_id)
             if member.status in ("left", "kicked", "banned"):
                 not_joined.append(ch)
         except TelegramForbiddenError as e:
-            # Bot is not a member/admin of this channel.
-            # Skip this channel — do NOT block the user.
             logger.warning(
-                "⚠️  PRIVATE CHANNEL %s: Bot is not admin — skipping membership check. "
-                "Add the bot as admin with 'Add Members' permission to enable force-join. Error: %s",
-                ch["channel_id"], e,
+                "⚠️  Channel %s: Bot not admin — skipping check. Make bot admin. Error: %s",
+                cid, e,
             )
         except TelegramBadRequest as e:
             err_str = str(e).lower()
             if "user not found" in err_str or "participant_id_invalid" in err_str:
-                # User genuinely not in channel
                 not_joined.append(ch)
             else:
-                # Invalid channel or other config error — skip to avoid blocking users
-                logger.warning(
-                    "⚠️  Channel %s check failed (bad request) — skipping. Error: %s",
-                    ch["channel_id"], e,
-                )
+                logger.warning("⚠️  Channel %s check failed — skipping. Error: %s", cid, e)
         except Exception as e:
-            logger.error(
-                "Unexpected error checking membership in %s: %s — skipping",
-                ch["channel_id"], e,
-            )
+            logger.error("Unexpected error checking channel %s: %s — skipping", cid, e)
+
     return not_joined
 
 

@@ -38,6 +38,7 @@ class AdminStates(StatesGroup):
     add_channel_type    = State()   # waiting for public/private choice
     add_channel_public  = State()   # waiting for @username
     add_channel_private = State()   # waiting for t.me/+ invite link
+    add_channel_chat_id = State()   # waiting for numeric chat id (-100xxx)
     add_channel_name    = State()   # waiting for display name (private only)
 
 
@@ -707,11 +708,42 @@ async def do_add_channel_private(message: Message, state: FSMContext, config: Co
     if not link.startswith("http"):
         link = f"https://{link}"
     await state.update_data(invite_link=link)
+    await state.set_state(AdminStates.add_channel_chat_id)
+    await message.answer(
+        "🔒 <b>Private Channel — Step 2/3</b>\n\n"
+        "Ab channel ka <b>numeric ID</b> bhejo.\n"
+        "Example: <code>-1001234567890</code>\n\n"
+        "<b>ID kaise milega?</b>\n"
+        "Channel mein koi bhi message forward karo <b>@userinfobot</b> pe — "
+        "woh channel ID bata dega.",
+        parse_mode="HTML",
+        reply_markup=cancel_kb("adm_channels"),
+    )
+
+
+@router.message(AdminStates.add_channel_chat_id)
+async def do_add_channel_chat_id(message: Message, state: FSMContext, config: Config) -> None:
+    if not is_admin(message.from_user.id, config):
+        return
+    raw = (message.text or "").strip()
+    # Accept formats: -1001234567890 or 1001234567890
+    try:
+        chat_id = int(raw)
+        if chat_id > 0:
+            chat_id = -chat_id  # ensure negative
+    except ValueError:
+        await message.answer(
+            "❌ Sirf numeric ID bhejo.\nExample: <code>-1001234567890</code>",
+            parse_mode="HTML",
+            reply_markup=cancel_kb("adm_channels"),
+        )
+        return
+    await state.update_data(chat_id=str(chat_id))
     await state.set_state(AdminStates.add_channel_name)
     await message.answer(
-        "🔒 <b>Private Channel</b>\n\n"
-        "Ab is channel ka <b>display name</b> bhejo\n"
-        "(jo users ko dikhe, e.g. <code>My Private Channel</code>):",
+        "🔒 <b>Private Channel — Step 3/3</b>\n\n"
+        "Ab channel ka <b>display name</b> bhejo\n"
+        "(jo users ko dikhe, e.g. <code>My VIP Channel</code>):",
         parse_mode="HTML",
         reply_markup=cancel_kb("adm_channels"),
     )
@@ -724,9 +756,10 @@ async def do_add_channel_name(message: Message, db: Database, state: FSMContext,
     data = await state.get_data()
     await state.clear()
     invite_link = data.get("invite_link", "")
+    chat_id = data.get("chat_id", invite_link)   # numeric id for membership check
     display_name = (message.text or "").strip() or invite_link
 
-    ok = await db.add_channel(channel_id=invite_link, username=None, title=display_name, invite_link=invite_link)
+    ok = await db.add_channel(channel_id=chat_id, username=None, title=display_name, invite_link=invite_link)
     if ok:
         await message.answer(
             f"✅ Private channel <b>{escape_html(display_name)}</b> add ho gaya!",
