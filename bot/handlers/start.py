@@ -18,6 +18,22 @@ from keyboards.user_kb import main_menu_kb, force_join_kb, back_to_menu_kb
 logger = logging.getLogger(__name__)
 router = Router()
 
+
+def _get_web_domain() -> str:
+    """Return the public domain for fingerprint verify links.
+    Priority: BOT_PUBLIC_URL > RAILWAY_PUBLIC_DOMAIN > REPLIT_DOMAINS > REPLIT_DEV_DOMAIN
+    """
+    custom = os.environ.get("BOT_PUBLIC_URL", "").strip().rstrip("/")
+    if custom:
+        return custom.replace("https://", "").replace("http://", "")
+    railway = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    if railway:
+        return railway
+    replit = os.environ.get("REPLIT_DOMAINS", "").split(",")[0].strip()
+    if replit:
+        return replit
+    return os.environ.get("REPLIT_DEV_DOMAIN", "").strip()
+
 MAX_CAPTCHA_ATTEMPTS = 3
 
 
@@ -304,10 +320,7 @@ async def handle_captcha(message: Message, db: Database, bot: Bot, state: FSMCon
         if user:
             # Generate web fingerprint token
             token = await db.create_device_token(user["id"])
-            domain = (
-                os.environ.get("REPLIT_DOMAINS", "").split(",")[0].strip()
-                or os.environ.get("REPLIT_DEV_DOMAIN", "").strip()
-            )
+            domain = _get_web_domain()
             verify_url = f"https://{domain}/verify?t={token}" if domain else None
 
             builder = InlineKeyboardBuilder()
@@ -454,10 +467,7 @@ async def cb_check_fv(cb: CallbackQuery, db: Database) -> None:
     else:
         # Regenerate token so user can retry
         token = await db.create_device_token(user["id"])
-        domain = (
-            os.environ.get("REPLIT_DOMAINS", "").split(",")[0].strip()
-            or os.environ.get("REPLIT_DEV_DOMAIN", "").strip()
-        )
+        domain = _get_web_domain()
         verify_url = f"https://{domain}/verify?t={token}" if domain else None
 
         builder = InlineKeyboardBuilder()

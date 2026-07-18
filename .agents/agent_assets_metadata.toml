@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "IIeOiIVwTRbr0qXPSuMrw"
+uri = "file://railway-bot.zip"
+type = "unspecified"
+title = "Railway Bot Files"
