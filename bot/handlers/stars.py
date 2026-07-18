@@ -13,7 +13,7 @@ router = Router()
 
 # ── Star tiers: (stars, points_cost) ─────────────────────────────────────────
 STAR_TIERS = [
-    (15, 300, "⭐"),
+    (15, 1500, "⭐"),
 ]
 
 
