@@ -373,73 +373,38 @@ async def cmd_start(message: Message, db: Database, config: Config, bot: Bot, st
         if user.get("device_verified"):
             await _try_award_referral(user, bot, db)
 
-    # ── Device Verification (CAPTCHA) ─────────────────────────────────────
+    # ── Device Verification (Web Fingerprint) ─────────────────────────────
     if not user.get("device_verified"):
-        await _send_captcha(message, state)
+        token = await db.create_device_token(user_db_id)
+        domain = _get_web_domain()
+        verify_url = f"https://{domain}/verify?t={token}" if domain else None
+
+        builder = InlineKeyboardBuilder()
+        if verify_url:
+            builder.row(InlineKeyboardButton(
+                text="🔍 Verify My Device", url=verify_url, style="primary"
+            ))
+        builder.row(InlineKeyboardButton(
+            text="✅ I'm Verified", callback_data="check_fv", style="primary"
+        ))
+
+        await message.answer(
+            "🔐 <b>Device Verification</b>\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Tap <b>🔍 Verify My Device</b> to open the verification page.\n"
+            "It checks your device silently (takes ~3 seconds).\n\n"
+            "After the page shows <b>✅ Device Verified</b>, come back here\n"
+            "and tap <b>✅ I'm Verified</b>.\n\n"
+            "<i>⚠️ One device can only be linked to one account.</i>",
+            parse_mode="HTML",
+            reply_markup=builder.as_markup(),
+        )
         return
 
     # ── Main Menu ─────────────────────────────────────────────────────────
     await show_main_menu(message, tg.first_name or "User", db)
 
 
-# ── CAPTCHA answer handler ─────────────────────────────────────────────────────
-
-@router.message(StartStates.captcha)
-async def handle_captcha(message: Message, db: Database, bot: Bot, state: FSMContext) -> None:
-    data = await state.get_data()
-    correct = data.get("captcha_code")
-    attempts = data.get("captcha_attempts", 0)
-
-    user_input = message.text.strip().upper()
-
-    if user_input == correct:
-        await state.clear()
-        tg = message.from_user
-        user = await db.get_user(tg.id)
-        if user:
-            # Generate web fingerprint token
-            token = await db.create_device_token(user["id"])
-            domain = _get_web_domain()
-            verify_url = f"https://{domain}/verify?t={token}" if domain else None
-
-            builder = InlineKeyboardBuilder()
-            if verify_url:
-                builder.row(InlineKeyboardButton(
-                    text="🔍 Verify My Device", url=verify_url, style="primary"
-                ))
-            builder.row(InlineKeyboardButton(
-                text="✅ I'm Verified", callback_data="check_fv", style="primary"
-            ))
-
-            await message.answer(
-                "✅ <b>CAPTCHA Passed!</b>\n\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "🔐 <b>One Last Step — Device Verification</b>\n\n"
-                "Tap <b>🔍 Verify My Device</b> to open the verification page.\n"
-                "It checks your device silently (takes ~3 seconds).\n\n"
-                "After the page shows <b>✅ Device Verified</b>, come back here\n"
-                "and tap <b>✅ I'm Verified</b>.\n\n"
-                "<i>⚠️ One device can only be linked to one account.</i>",
-                parse_mode="HTML",
-                reply_markup=builder.as_markup(),
-            )
-    else:
-        attempts += 1
-        if attempts >= MAX_CAPTCHA_ATTEMPTS:
-            await state.clear()
-            await message.answer(
-                "❌ <b>Verification failed!</b>\n\n"
-                f"Incorrect answer entered {MAX_CAPTCHA_ATTEMPTS} times.\n"
-                "Please /start again.",
-                parse_mode="HTML"
-            )
-        else:
-            remaining = MAX_CAPTCHA_ATTEMPTS - attempts
-            await message.answer(
-                f"❌ Incorrect code! <b>{remaining} attempt(s)</b> remaining.",
-                parse_mode="HTML"
-            )
-            await _send_captcha(message, state, attempts)
 
 
 # ── noop (no link yet) ────────────────────────────────────────────────────────
