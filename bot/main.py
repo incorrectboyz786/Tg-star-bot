@@ -109,7 +109,8 @@ def make_web_app(db: Database) -> web.Application:
 
 
 async def run_web_server(db: Database) -> None:
-    port = int(os.environ.get("PORT", 8080))
+    # In production PORT=8080; in dev, api-server occupies 8080 so use 8082.
+    port = int(os.environ.get("BOT_WEB_PORT", os.environ.get("PORT", 8082)))
     app = make_web_app(db)
     runner = web.AppRunner(app)
     await runner.setup()

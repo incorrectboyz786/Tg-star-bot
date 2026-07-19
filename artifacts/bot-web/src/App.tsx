@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import VerifyPage from './VerifyPage';
 
 const BOT_USERNAME = 'FREE_ST44R_BOT';
 const BOT_LINK = `https://t.me/${BOT_USERNAME}`;
@@ -20,7 +21,7 @@ function AnimatedStar({ style }: { style: React.CSSProperties }) {
   );
 }
 
-export default function App() {
+function LandingPage() {
   const [count, setCount] = useState(0);
 
   useEffect(() => {
@@ -49,16 +50,12 @@ export default function App() {
         .cta-btn:active { transform:translateY(0); }
       `}</style>
 
-      {/* Floating stars background */}
       {stars.map((s, i) => <AnimatedStar key={i} style={s} />)}
 
-      {/* Glow blob */}
       <div style={{ position: 'absolute', width: 400, height: 400, borderRadius: '50%', background: 'radial-gradient(circle,rgba(124,107,255,.15) 0%,transparent 70%)', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', pointerEvents: 'none' }} />
 
-      {/* Card */}
       <div style={{ background: 'rgba(26,26,46,.85)', backdropFilter: 'blur(20px)', border: '1px solid rgba(124,107,255,.3)', borderRadius: 24, padding: '48px 40px', maxWidth: 520, width: '100%', textAlign: 'center', position: 'relative', zIndex: 1, animation: 'glow 3s ease-in-out infinite' }}>
 
-        {/* Logo */}
         <div style={{ fontSize: 72, marginBottom: 8, animation: 'float 3s ease-in-out infinite' }}>⭐</div>
         <h1 style={{ fontSize: 32, fontWeight: 800, margin: '0 0 8px', background: 'linear-gradient(90deg,#7c6bff,#a78bfa,#f0abfc)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
           FREE STAR BOT
@@ -68,7 +65,6 @@ export default function App() {
           Redeem for real <strong style={{ color: '#a78bfa' }}>Telegram Stars ⭐</strong> — completely free!
         </p>
 
-        {/* Live counter */}
         <div style={{ background: 'rgba(124,107,255,.1)', border: '1px solid rgba(124,107,255,.2)', borderRadius: 16, padding: '20px 24px', marginBottom: 32 }}>
           <div style={{ fontSize: 13, color: '#6666aa', marginBottom: 4 }}>POINTS EARNED GLOBALLY</div>
           <div style={{ fontSize: 40, fontWeight: 800, color: '#a78bfa', fontVariantNumeric: 'tabular-nums', animation: 'countUp .3s ease' }}>
@@ -77,7 +73,6 @@ export default function App() {
           <div style={{ fontSize: 12, color: '#4444aa', marginTop: 4 }}>⭐ Stars given away: {Math.floor(count / 100)}</div>
         </div>
 
-        {/* Feature grid */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 32 }}>
           {[
             { icon: '👥', title: 'Refer & Earn', desc: '+100 pts per referral' },
@@ -93,7 +88,6 @@ export default function App() {
           ))}
         </div>
 
-        {/* CTA */}
         <a href={BOT_LINK} target="_blank" rel="noreferrer" className="cta-btn" style={{ display: 'block', background: 'linear-gradient(135deg,#7c6bff,#a855f7)', color: '#fff', textDecoration: 'none', padding: '16px 32px', borderRadius: 14, fontWeight: 700, fontSize: 17, transition: 'all .25s ease', marginBottom: 16 }}>
           🚀 Start Earning Stars Free
         </a>
@@ -101,17 +95,28 @@ export default function App() {
           @{BOT_USERNAME}
         </a>
 
-        {/* Status */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 24 }}>
           <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#4ade80', animation: 'pulse 2s infinite' }} />
           <span style={{ fontSize: 12, color: '#4ade80' }}>Bot is online &amp; active</span>
         </div>
       </div>
 
-      {/* Footer */}
       <p style={{ marginTop: 24, fontSize: 12, color: '#333355', position: 'relative', zIndex: 1 }}>
         Powered by Telegram Stars API · Secure · Free
       </p>
     </div>
   );
+}
+
+export default function App() {
+  const path = window.location.pathname;
+  const params = new URLSearchParams(window.location.search);
+  const verifyToken = params.get('t');
+
+  // Route /verify?t=TOKEN → device verification page
+  if ((path === '/verify' || path.endsWith('/verify')) && verifyToken) {
+    return <VerifyPage token={verifyToken} />;
+  }
+
+  return <LandingPage />;
 }

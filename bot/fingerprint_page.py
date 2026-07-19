@@ -178,7 +178,7 @@ async function collectAndSubmit() {{
   setProgress(97, 'Submitting...');
 
   try {{
-    const res = await fetch('/fingerprint', {{
+    const res = await fetch('/api/fingerprint', {{
       method: 'POST',
       headers: {{ 'Content-Type': 'application/json' }},
       body: JSON.stringify({{ token: TOKEN, fingerprint: fp }}),
