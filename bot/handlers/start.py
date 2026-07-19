@@ -300,33 +300,34 @@ async def cmd_start(message: Message, db: Database, config: Config, bot: Bot, st
     channels = await db.get_channels()
     if channels:
         channels = await enrich_channels(bot, channels, db)
-        not_joined = await check_force_join(bot, tg.id, channels)
-        if not_joined:
+        if not user.get("force_join_done"):
+            # Show join screen for ALL channels — bot may not be admin,
+            # so don't filter here. Membership is only checked on "Verify Joined".
             try:
                 import os
                 from aiogram.types import FSInputFile
                 _BOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
                 vid_path = os.path.join(_BOT_DIR, "vid.mp4")
-                
+
                 bot_display_name = await _get_bot_name(bot)
                 caption_text = (
                     f"👋 𝗪𝗲𝗹𝗰𝗼𝗺𝗲 𝘁𝗼 {bot_display_name}\n\n"
                     "📢 𝙁𝙄𝙍𝙎𝙏 𝙅𝙊𝙄𝙉 𝘾𝙃𝘼𝙉𝙉𝙀𝙇.\n\n"
                     "𝙏𝙃𝙀𝙉 𝘾𝙇𝙄𝘾𝙆 𝙊𝙉 𝙑𝙀𝙍𝙄𝙁𝙄𝙀𝘿 𝙅𝙊𝙄𝙉."
                 )
-                
+
                 if os.path.exists(vid_path):
                     await message.answer_video(
                         video=FSInputFile(vid_path),
                         caption=caption_text,
                         parse_mode="HTML",
-                        reply_markup=force_join_kb(not_joined),
+                        reply_markup=force_join_kb(channels),
                     )
                 else:
                     await message.answer(
                         text=caption_text,
                         parse_mode="HTML",
-                        reply_markup=force_join_kb(not_joined),
+                        reply_markup=force_join_kb(channels),
                     )
             except TelegramForbiddenError:
                 pass  # user blocked bot — nothing to do
@@ -338,15 +339,13 @@ async def cmd_start(message: Message, db: Database, config: Config, bot: Bot, st
                              "📢 <b>Pehle yeh channels join karo:</b>\n\n"
                              "Join karne ke baad <b>✅ Verify Joined</b> dabao.",
                         parse_mode="HTML",
-                        reply_markup=force_join_kb(not_joined),
+                        reply_markup=force_join_kb(channels),
                     )
                 except Exception:
                     pass
             return
         else:
-            await db.set_force_join_done(user_db_id)
-            user["force_join_done"] = 1
-            # Award referral only after channel join confirmed
+            # Already passed force join — just ensure referral is awarded
             await _try_award_referral(user, bot, db)
     else:
         # No channels configured — award referral immediately if user is already verified,
