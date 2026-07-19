@@ -435,33 +435,60 @@ async def cb_verify_join(cb: CallbackQuery, db: Database, bot: Bot, state: FSMCo
         return
 
     await db.set_force_join_done(user["id"])
-    # Auto-mark device verified — no captcha needed after channel join
-    if not user.get("device_verified"):
-        await db.set_device_verified(user["id"])
     await cb.answer("✅ Channels verified!", show_alert=False)
 
-    # Award referral only after channel join confirmed
-    await _try_award_referral(user, bot, db)
+    if not user.get("device_verified"):
+        # Show web fingerprint verification next
+        token = await db.create_device_token(user["id"])
+        domain = _get_web_domain()
+        verify_url = f"https://{domain}/verify?t={token}" if domain else None
 
-    if cb.message.video or cb.message.photo:
+        builder = InlineKeyboardBuilder()
+        if verify_url:
+            builder.row(InlineKeyboardButton(
+                text="🔍 Verify My Device", url=verify_url, style="primary"
+            ))
+        builder.row(InlineKeyboardButton(
+            text="✅ I'm Verified", callback_data="check_fv", style="primary"
+        ))
+
         try:
             await cb.message.delete()
         except Exception:
             pass
         await cb.message.answer(
-            _home_text(tg.first_name or "User"),
+            "🔐 <b>Device Verification</b>\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Tap <b>🔍 Verify My Device</b> to open the verification page.\n"
+            "It checks your device silently (takes ~3 seconds).\n\n"
+            "After the page shows <b>✅ Device Verified</b>, come back here\n"
+            "and tap <b>✅ I'm Verified</b>.\n\n"
+            "<i>⚠️ Ek phone = ek account. Multi-account allowed nahi.</i>",
             parse_mode="HTML",
-            reply_markup=main_menu_kb(),
+            reply_markup=builder.as_markup(),
         )
     else:
-        try:
-            await cb.message.edit_text(
+        # Already verified — award referral and go to menu
+        await _try_award_referral(user, bot, db)
+        if cb.message.video or cb.message.photo:
+            try:
+                await cb.message.delete()
+            except Exception:
+                pass
+            await cb.message.answer(
                 _home_text(tg.first_name or "User"),
                 parse_mode="HTML",
                 reply_markup=main_menu_kb(),
             )
-        except Exception:
-            pass
+        else:
+            try:
+                await cb.message.edit_text(
+                    _home_text(tg.first_name or "User"),
+                    parse_mode="HTML",
+                    reply_markup=main_menu_kb(),
+                )
+            except Exception:
+                pass
 
 
 # ── Check device fingerprint verified ────────────────────────────────────────
