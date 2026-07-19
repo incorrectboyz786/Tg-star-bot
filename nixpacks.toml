@@ -2,7 +2,13 @@
 nixPkgs = ["python311", "python311Packages.pip", "freetype", "libjpeg", "libwebp", "zlib"]
 
 [phases.install]
-cmds = ["pip install -r bot/requirements.txt"]
+cmds = [
+  "pip install --break-system-packages -r bot/requirements.txt",
+  "pnpm install --frozen-lockfile"
+]
+
+[phases.build]
+cmds = ["pnpm --filter @workspace/api-server build"]
 
 [start]
 cmd = "cd bot && python3 main.py"
