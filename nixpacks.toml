@@ -8,5 +8,8 @@ cmds = [
   "/opt/venv/bin/pip install -r bot/requirements.txt"
 ]
 
+[phases.build]
+cmds = []
+
 [start]
 cmd = "cd bot && /opt/venv/bin/python main.py"
