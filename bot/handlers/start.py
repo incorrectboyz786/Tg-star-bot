@@ -296,6 +296,11 @@ async def cmd_start(message: Message, db: Database, config: Config, bot: Bot, st
     await db.update_user_info(tg.id, tg.username, tg.first_name or "User", tg.last_name)
     user = await db.get_user(tg.id)
 
+    # ── Admin bypass — skip all verification ──────────────────────────────
+    if tg.id in config.admin_ids:
+        await show_main_menu(message, tg.first_name or "User", db)
+        return
+
     # ── Force Join — every /start ──────────────────────────────────────────
     channels = await db.get_channels()
     if channels:
