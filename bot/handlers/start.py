@@ -203,9 +203,17 @@ async def cmd_start(message: Message, db: Database, config: Config, bot: Bot, st
     channels = await db.get_channels()
     if channels:
         channels = await enrich_channels(bot, channels, db)
+
+        # Decide which channels to show:
+        # - First time (force_join_done=False): show ALL (membership check happens on Verify)
+        # - Returning user: re-check membership so users who left get the screen again
         if not user.get("force_join_done"):
-            # Show join screen for ALL channels — bot may not be admin,
-            # so don't filter here. Membership is only checked on "Verify Joined".
+            channels_to_show = channels
+        else:
+            channels_to_show = await check_force_join(bot, tg.id, channels)
+
+        if channels_to_show:
+            # Show force-join screen (first visit OR user left a channel)
             try:
                 import os
                 from aiogram.types import FSInputFile
@@ -224,13 +232,13 @@ async def cmd_start(message: Message, db: Database, config: Config, bot: Bot, st
                         video=FSInputFile(vid_path),
                         caption=caption_text,
                         parse_mode="HTML",
-                        reply_markup=force_join_kb(channels),
+                        reply_markup=force_join_kb(channels_to_show),
                     )
                 else:
                     await message.answer(
                         text=caption_text,
                         parse_mode="HTML",
-                        reply_markup=force_join_kb(channels),
+                        reply_markup=force_join_kb(channels_to_show),
                     )
             except TelegramForbiddenError:
                 pass  # user blocked bot — nothing to do
@@ -242,13 +250,13 @@ async def cmd_start(message: Message, db: Database, config: Config, bot: Bot, st
                              "📢 <b>Pehle yeh channels join karo:</b>\n\n"
                              "Join karne ke baad <b>✅ Verify Joined</b> dabao.",
                         parse_mode="HTML",
-                        reply_markup=force_join_kb(channels),
+                        reply_markup=force_join_kb(channels_to_show),
                     )
                 except Exception:
                     pass
             return
         else:
-            # Already passed force join — just ensure referral is awarded
+            # All channels still joined — award referral if pending
             await _try_award_referral(user, bot, db)
     else:
         # No channels configured — award referral immediately if user is already verified,
