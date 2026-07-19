@@ -47,3 +47,9 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Bot database (local only)
+bot/bot.db
+bot/__pycache__/
+bot/**/__pycache__/
+*.pyc
