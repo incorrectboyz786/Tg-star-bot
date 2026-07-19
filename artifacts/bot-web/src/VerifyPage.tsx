@@ -34,6 +34,22 @@ function webglInfo(): string {
   } catch { return 'no-webgl'; }
 }
 
+function audioFingerprint(): string {
+  try {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const analyser = ctx.createAnalyser();
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    osc.connect(analyser); analyser.connect(gain); gain.connect(ctx.destination);
+    osc.start(0); osc.stop(0.001);
+    const data = new Float32Array(analyser.frequencyBinCount);
+    analyser.getFloatFrequencyData(data);
+    ctx.close();
+    return Array.from(data.slice(0, 10)).join(',');
+  } catch { return 'no-audio'; }
+}
+
 const STEPS = [
   [15,  'Reading browser info...'],
   [35,  'Collecting screen data...'],
@@ -62,6 +78,7 @@ export default function VerifyPage({ token }: { token: string }) {
 
       const canvas = canvasFingerprint();
       const webgl = webglInfo();
+      const audio = audioFingerprint();
       const raw = [
         navigator.userAgent,
         `${screen.width}x${screen.height}x${screen.colorDepth}`,
@@ -73,6 +90,7 @@ export default function VerifyPage({ token }: { token: string }) {
         navigator.cookieEnabled,
         canvas,
         webgl,
+        audio,
       ].join('||');
 
       const fp = await sha256(raw);

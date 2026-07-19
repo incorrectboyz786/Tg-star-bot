@@ -104,7 +104,9 @@ def make_web_app(db: Database) -> web.Application:
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
     app.router.add_get("/verify", verify_page)
+    # /fingerprint — direct (dev), /api/fingerprint — Railway single-service
     app.router.add_post("/fingerprint", fingerprint_handler)
+    app.router.add_post("/api/fingerprint", fingerprint_handler)
     return app
 
 

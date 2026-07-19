@@ -18,8 +18,13 @@ from utils.helpers import get_rank, streak_bonus, RANKS
 
 logger = logging.getLogger(__name__)
 
-STAR_TIERS = [(15, 1500, "⭐")]
 DAILY_BASE = 50
+
+
+async def _get_star_tiers(db: Database):
+    stars_amt = int(await db.get_setting("stars_per_claim", "15"))
+    min_bal   = int(await db.get_setting("min_stars_balance", "1500"))
+    return [(stars_amt, min_bal, "⭐")]
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -259,8 +264,9 @@ async def api_stars_tiers(request: web.Request) -> web.Response:
     wallet = await db.get_wallet(user["id"])
     balance = wallet.get("balance", 0)
 
+    star_tiers = await _get_star_tiers(db)
     tiers = []
-    for stars, cost, icon in STAR_TIERS:
+    for stars, cost, icon in star_tiers:
         tiers.append({
             "stars": stars,
             "cost": cost,
@@ -285,8 +291,9 @@ async def api_stars_withdraw(request: web.Request) -> web.Response:
     except Exception:
         return _err("invalid_json")
 
+    star_tiers = await _get_star_tiers(db)
     stars = int(body.get("stars", 0))
-    valid_tier = next((t for t in STAR_TIERS if t[0] == stars), None)
+    valid_tier = next((t for t in star_tiers if t[0] == stars), None)
     if not valid_tier:
         return _err("invalid_tier")
 
