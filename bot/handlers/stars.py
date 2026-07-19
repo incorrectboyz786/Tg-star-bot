@@ -30,15 +30,20 @@ async def cb_get_stars(cb: CallbackQuery, db: Database) -> None:
     balance = wallet.get("balance", 0)
     reward_per_ref = int(await db.get_setting("referral_reward", "100"))
 
+    # Load tiers from DB settings
+    stars_amt = int(await db.get_setting("stars_per_claim", "15"))
+    min_bal   = int(await db.get_setting("min_stars_balance", "1500"))
+    star_tiers = [(stars_amt, min_bal, "⭐")]
+
     # Progress bar toward first tier
-    first_cost = STAR_TIERS[0][1]
+    first_cost = star_tiers[0][1]
     pct = min(100, int(balance / first_cost * 100)) if first_cost else 100
     filled = pct // 10
     bar = "█" * filled + "░" * (10 - filled)
 
     # Build tier lines
     tier_lines = ""
-    for stars, cost, icon in STAR_TIERS:
+    for stars, cost, icon in star_tiers:
         if balance >= cost:
             tier_lines += f"  {icon} <b>{stars} Stars</b> — {format_number(cost)} pts ✅\n"
         else:
@@ -56,7 +61,7 @@ async def cb_get_stars(cb: CallbackQuery, db: Database) -> None:
     )
     await cb.message.edit_text(
         text, parse_mode="HTML",
-        reply_markup=stars_tiers_kb(balance, STAR_TIERS),
+        reply_markup=stars_tiers_kb(balance, star_tiers),
     )
 
 
@@ -68,8 +73,12 @@ async def cb_select_tier(cb: CallbackQuery, db: Database) -> None:
     if not user:
         return
 
+    stars_amt_setting = int(await db.get_setting("stars_per_claim", "15"))
+    min_bal_setting   = int(await db.get_setting("min_stars_balance", "1500"))
+    star_tiers = [(stars_amt_setting, min_bal_setting, "⭐")]
+
     stars = int(cb.data.split("_")[2])
-    tier = next(((s, c, i) for s, c, i in STAR_TIERS if s == stars), None)
+    tier = next(((s, c, i) for s, c, i in star_tiers if s == stars), None)
     if not tier:
         return
 

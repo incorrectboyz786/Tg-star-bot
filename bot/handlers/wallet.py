@@ -10,11 +10,6 @@ from utils.helpers import format_number, progress_bar, get_rank
 logger = logging.getLogger(__name__)
 router = Router()
 
-STAR_TIERS = [
-    (15, 1500, "⭐"),
-]
-
-
 @router.callback_query(F.data == "wallet")
 async def cb_wallet(cb: CallbackQuery, db: Database) -> None:
     await cb.answer()
@@ -32,9 +27,13 @@ async def cb_wallet(cb: CallbackQuery, db: Database) -> None:
 
     rank_emoji, rank_title, _ = get_rank(total_earned)
 
-    # Multi-tier progress
+    # Multi-tier progress — load from DB settings
+    stars_amt_s = int(await db.get_setting("stars_per_claim", "15"))
+    min_bal_s   = int(await db.get_setting("min_stars_balance", "1500"))
+    star_tiers  = [(stars_amt_s, min_bal_s, "⭐")]
+
     tier_lines = ""
-    for stars, cost, icon in STAR_TIERS:
+    for stars, cost, icon in star_tiers:
         bar = progress_bar(balance, cost, length=8)
         status = "✅ READY" if balance >= cost else f"need {format_number(max(0, cost - balance))}"
         tier_lines += f"  {icon} {stars}⭐ ({format_number(cost)} pts)\n  {bar}  [{status}]\n\n"

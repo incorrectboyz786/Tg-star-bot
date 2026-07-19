@@ -9,11 +9,6 @@ from utils.helpers import format_number, escape_html, truncate, progress_bar
 logger = logging.getLogger(__name__)
 router = Router()
 
-STAR_TIERS = [
-    (15, 1500, "⭐"),
-]
-
-
 def _ref_kb(bot_username: str, tg_id: int) -> InlineKeyboardMarkup:
     ref_link = f"https://t.me/{bot_username}?start=ref_{tg_id}"
     share_url = f"https://t.me/share/url?url={ref_link}&text=🌟+Earn+FREE+Telegram+Stars!+Join+now+%26+get+rewarded!"
@@ -49,8 +44,12 @@ async def cb_refer(cb: CallbackQuery, db: Database, bot: Bot) -> None:
     lb_rank       = await db.get_user_leaderboard_rank(user["id"])
 
     # Nearest unlocked/next tier
+    stars_amt_s = int(await db.get_setting("stars_per_claim", "15"))
+    min_bal_s   = int(await db.get_setting("min_stars_balance", "1500"))
+    star_tiers  = [(stars_amt_s, min_bal_s, "⭐")]
+
     next_tier_str = ""
-    for stars, cost, icon in STAR_TIERS:
+    for stars, cost, icon in star_tiers:
         if balance < cost:
             needed_pts  = cost - balance
             needed_refs = max(1, -(-needed_pts // reward_per_ref))
