@@ -1,13 +1,9 @@
 import logging
 import os
-import random
-import io
-from PIL import Image, ImageDraw, ImageFont
 from aiogram import Router, F, Bot
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery, BufferedInputFile, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
@@ -50,30 +46,7 @@ def _get_web_domain() -> str:
         return replit
     return os.environ.get("REPLIT_DEV_DOMAIN", "").strip()
 
-MAX_CAPTCHA_ATTEMPTS = 3
-
-
-# ── FSM ────────────────────────────────────────────────────────────────────────
-
-class StartStates(StatesGroup):
-    captcha = State()
-
-
 # ── Helpers ────────────────────────────────────────────────────────────────────
-
-def _gen_captcha() -> tuple[str, int]:
-    """Return (question_text, correct_answer)."""
-    ops = [
-        lambda a, b: (f"{a} + {b}", a + b),
-        lambda a, b: (f"{a} × {b}", a * b),
-        lambda a, b: (f"{a} - {b}", a - b),
-    ]
-    op = random.choice(ops)
-    a, b = random.randint(2, 12), random.randint(2, 12)
-    if op == ops[2] and b > a:   # avoid negative subtraction
-        a, b = b, a
-    q, ans = op(a, b)
-    return q, ans
 
 
 async def enrich_channels(bot: Bot, channels: list, db: Database) -> list[dict]:
@@ -188,81 +161,6 @@ async def _try_award_referral(user: dict, bot: Bot, db: Database) -> None:
             pass
 
 
-def generate_image_captcha(text: str) -> io.BytesIO:
-    # Create an image with a light background
-    width, height = 220, 80
-    image = Image.new("RGB", (width, height), color=(245, 245, 245))
-    draw = ImageDraw.Draw(image)
-    
-    # Try loading DejaVuSans, fallback to default font
-    try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36)
-    except Exception:
-        try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 36)
-        except Exception:
-            font = ImageFont.load_default()
-            
-    # Draw background noise lines
-    for _ in range(8):
-        x1 = random.randint(0, width)
-        y1 = random.randint(0, height)
-        x2 = random.randint(0, width)
-        y2 = random.randint(0, height)
-        draw.line((x1, y1, x2, y2), fill=random.choice([(200, 200, 200), (180, 180, 180), (220, 220, 220)]), width=2)
-        
-    # Draw character by character with slight rotation/offset
-    for i, char in enumerate(text):
-        char_x = 20 + i * 35 + random.randint(-5, 5)
-        char_y = 15 + random.randint(-8, 8)
-        color = random.choice([
-            (220, 50, 50),
-            (50, 150, 50),
-            (50, 50, 200),
-            (150, 50, 150),
-            (50, 150, 150),
-            (50, 50, 50)
-        ])
-        draw.text((char_x, char_y), char, font=font, fill=color)
-        
-    # Draw foreground noise dots
-    for _ in range(150):
-        x = random.randint(0, width)
-        y = random.randint(0, height)
-        draw.point((x, y), fill=(100, 100, 100))
-        
-    # Save image to BytesIO
-    out = io.BytesIO()
-    image.save(out, format="PNG")
-    out.seek(0)
-    return out
-
-
-async def _send_captcha(target, state: FSMContext, attempts: int = 0) -> None:
-    """Send a fresh image CAPTCHA. target = Message or CallbackQuery."""
-    code = "".join(random.choices("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", k=5))
-    await state.set_state(StartStates.captcha)
-    await state.update_data(captcha_code=code, captcha_attempts=attempts)
-    
-    # Generate image
-    image_data = generate_image_captcha(code)
-    photo = BufferedInputFile(image_data.read(), filename="captcha.png")
-    
-    text = (
-        "🔐 <b>Advanced Device Verification</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "To prevent bot abuse, please type the characters shown in the image below:\n\n"
-        "<i>Type the 5 characters shown in the image below (Case-Insensitive).</i>"
-    )
-    
-    if isinstance(target, CallbackQuery):
-        try:
-            await target.message.delete()
-        except Exception:
-            pass
-        await target.message.answer_photo(photo, caption=text, parse_mode="HTML")
-    else:
-        await target.answer_photo(photo, caption=text, parse_mode="HTML")
 
 
 # ── /start ─────────────────────────────────────────────────────────────────────

@@ -30,11 +30,15 @@ async def cb_daily_bonus(cb: CallbackQuery, db: Database) -> None:
     can_claim = True
     remaining = None
     if last_claimed:
-        last_dt = datetime.fromisoformat(last_claimed)
-        elapsed = datetime.utcnow() - last_dt
-        if elapsed < timedelta(hours=24):
-            can_claim = False
-            remaining = timedelta(hours=24) - elapsed
+        try:
+            last_dt = datetime.fromisoformat(last_claimed)
+        except (ValueError, TypeError):
+            last_dt = None
+        if last_dt:
+            elapsed = datetime.utcnow() - last_dt
+            if elapsed < timedelta(hours=24):
+                can_claim = False
+                remaining = timedelta(hours=24) - elapsed
 
     if not can_claim:
         time_str = format_timedelta(remaining) if remaining else "soon"
@@ -77,8 +81,11 @@ async def cb_daily_bonus(cb: CallbackQuery, db: Database) -> None:
 
     # Determine new streak
     if last_claimed:
-        last_dt = datetime.fromisoformat(last_claimed)
-        hours_since = (datetime.utcnow() - last_dt).total_seconds() / 3600
+        try:
+            last_dt = datetime.fromisoformat(last_claimed)
+        except (ValueError, TypeError):
+            last_dt = None
+        hours_since = (datetime.utcnow() - last_dt).total_seconds() / 3600 if last_dt else 999
         new_streak = streak + 1 if hours_since < 48 else 1
     else:
         new_streak = 1

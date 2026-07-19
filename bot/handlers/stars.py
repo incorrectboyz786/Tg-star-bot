@@ -107,9 +107,13 @@ async def cb_do_withdraw(cb: CallbackQuery, db: Database, bot: Bot, config) -> N
     if not user:
         return
 
-    parts = cb.data.split("_")   # do_withdraw_{stars}_{cost}
-    stars_amt = int(parts[2])
-    cost = int(parts[3])
+    try:
+        parts = cb.data.split("_")   # do_withdraw_{stars}_{cost}
+        stars_amt = int(parts[2])
+        cost = int(parts[3])
+    except (IndexError, ValueError):
+        await cb.message.edit_text("⚠️ <b>Invalid request.</b> Please try again.", parse_mode="HTML", reply_markup=back_to_menu_kb())
+        return
 
     withdrawal_id = await db.create_withdrawal(
         user_id=user["id"],
