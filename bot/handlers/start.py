@@ -435,33 +435,33 @@ async def cb_verify_join(cb: CallbackQuery, db: Database, bot: Bot, state: FSMCo
         return
 
     await db.set_force_join_done(user["id"])
+    # Auto-mark device verified — no captcha needed after channel join
+    if not user.get("device_verified"):
+        await db.set_device_verified(user["id"])
     await cb.answer("✅ Channels verified!", show_alert=False)
 
     # Award referral only after channel join confirmed
     await _try_award_referral(user, bot, db)
 
-    if not user.get("device_verified"):
-        await _send_captcha(cb, state)
+    if cb.message.video or cb.message.photo:
+        try:
+            await cb.message.delete()
+        except Exception:
+            pass
+        await cb.message.answer(
+            _home_text(tg.first_name or "User"),
+            parse_mode="HTML",
+            reply_markup=main_menu_kb(),
+        )
     else:
-        if cb.message.video or cb.message.photo:
-            try:
-                await cb.message.delete()
-            except Exception:
-                pass
-            await cb.message.answer(
+        try:
+            await cb.message.edit_text(
                 _home_text(tg.first_name or "User"),
                 parse_mode="HTML",
                 reply_markup=main_menu_kb(),
             )
-        else:
-            try:
-                await cb.message.edit_text(
-                    _home_text(tg.first_name or "User"),
-                    parse_mode="HTML",
-                    reply_markup=main_menu_kb(),
-                )
-            except Exception:
-                pass
+        except Exception:
+            pass
 
 
 # ── Check device fingerprint verified ────────────────────────────────────────
